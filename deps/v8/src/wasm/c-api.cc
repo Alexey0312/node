@@ -35,6 +35,7 @@
 #include "src/objects/managed-inl.h"
 #include "src/wasm/leb-helper.h"
 #include "src/wasm/module-instantiate.h"
+#include "src/wasm/serialized-signature-inl.h"
 #include "src/wasm/wasm-arguments.h"
 #include "src/wasm/wasm-constants.h"
 #include "src/wasm/wasm-engine.h"
@@ -42,6 +43,9 @@
 #include "src/wasm/wasm-result.h"
 #include "src/wasm/wasm-serialization.h"
 #include "third_party/wasm-api/wasm.h"
+#ifdef ENABLE_VTUNE_JIT_INTERFACE
+#include "src/third_party/vtune/v8-vtune.h"
+#endif
 
 #ifdef WASM_API_DEBUG
 #error "WASM_API_DEBUG is unsupported"
@@ -116,7 +120,7 @@ i::wasm::ValueType WasmValKindToV8(ValKind kind) {
 }
 
 Name GetNameFromWireBytes(const i::wasm::WireBytesRef& ref,
-                          const v8::base::Vector<const uint8_t>& wire_bytes) {
+                          v8::base::Vector<const uint8_t> wire_bytes) {
   DCHECK_LE(ref.offset(), wire_bytes.length());
   DCHECK_LE(ref.end_offset(), wire_bytes.length());
   if (ref.length() == 0) return Name::make();
@@ -154,9 +158,9 @@ own<ExternType> GetImportExportType(const i::wasm::WasmModule* module,
       return TableType::make(std::move(elem), limits);
     }
     case i::wasm::kExternalMemory: {
-      DCHECK(module->has_memory);
-      Limits limits(module->initial_pages,
-                    module->has_maximum_pages ? module->maximum_pages : -1);
+      const i::wasm::WasmMemory& memory = module->memories[index];
+      Limits limits(memory.initial_pages,
+                    memory.has_maximum_pages ? memory.maximum_pages : -1);
       return MemoryType::make(limits);
     }
     case i::wasm::kExternalGlobal: {
@@ -412,7 +416,7 @@ void CheckAndHandleInterrupts(i::Isolate* isolate) {
 StoreImpl::~StoreImpl() {
 #ifdef DEBUG
   reinterpret_cast<i::Isolate*>(isolate_)->heap()->PreciseCollectAllGarbage(
-      i::Heap::kForcedGC, i::GarbageCollectionReason::kTesting,
+      i::GCFlag::kForced, i::GarbageCollectionReason::kTesting,
       v8::kNoGCCallbackFlags);
 #endif
   context()->Exit();
@@ -448,9 +452,9 @@ void StoreImpl::SetHostInfo(i::Handle<i::Object> object, void* info,
 
 void* StoreImpl::GetHostInfo(i::Handle<i::Object> key) {
   i::Object raw =
-      i::EphemeronHashTable::cast(host_info_map_->table()).Lookup(key);
+      i::EphemeronHashTable::cast(host_info_map_->table())->Lookup(key);
   if (raw.IsTheHole(i_isolate())) return nullptr;
-  return i::Managed<ManagedData>::cast(raw).raw()->info;
+  return i::Managed<ManagedData>::cast(raw)->raw()->info;
 }
 
 template <>
@@ -469,6 +473,9 @@ auto Store::make(Engine*) -> own<Store> {
   // Create isolate.
   store->create_params_.array_buffer_allocator =
       v8::ArrayBuffer::Allocator::NewDefaultAllocator();
+#ifdef ENABLE_VTUNE_JIT_INTERFACE
+  store->create_params_.code_event_handler = vTune::GetVtuneCodeEventHandler();
+#endif
 #if DUMP_COUNTERS
   store->create_params_.counter_lookup_callback = EngineImpl::LookupCounter;
   store->create_params_.create_histogram_callback = EngineImpl::CreateHistogram;
@@ -1380,72 +1387,48 @@ struct FuncData {
 
 namespace {
 
-// TODO(jkummerow): Generalize for WasmExportedFunction and WasmCapiFunction.
 class SignatureHelper : public i::AllStatic {
  public:
-  // Use an invalid type as a marker separating params and results.
-  static constexpr i::wasm::ValueType kMarker = i::wasm::kWasmVoid;
-
   static i::Handle<i::PodArray<i::wasm::ValueType>> Serialize(
       i::Isolate* isolate, FuncType* type) {
-    int sig_size =
-        static_cast<int>(type->params().size() + type->results().size() + 1);
     i::Handle<i::PodArray<i::wasm::ValueType>> sig =
-        i::PodArray<i::wasm::ValueType>::New(isolate, sig_size,
-                                             i::AllocationType::kOld);
-    int index = 0;
+        i::wasm::SerializedSignatureHelper::NewEmptyPodArrayForSignature(
+            isolate, type->results().size(), type->params().size());
+
     // TODO(jkummerow): Consider making vec<> range-based for-iterable.
     for (size_t i = 0; i < type->results().size(); i++) {
-      sig->set(index++, WasmValKindToV8(type->results()[i]->kind()));
+      i::wasm::SerializedSignatureHelper::SetReturn(
+          *sig, i, WasmValKindToV8(type->results()[i]->kind()));
     }
-    // {sig->set} needs to take the address of its second parameter,
-    // so we can't pass in the static const kMarker directly.
-    i::wasm::ValueType marker = kMarker;
-    sig->set(index++, marker);
     for (size_t i = 0; i < type->params().size(); i++) {
-      sig->set(index++, WasmValKindToV8(type->params()[i]->kind()));
+      i::wasm::SerializedSignatureHelper::SetParam(
+          *sig, i, WasmValKindToV8(type->params()[i]->kind()));
     }
     return sig;
   }
 
   static own<FuncType> Deserialize(i::PodArray<i::wasm::ValueType> sig) {
-    int result_arity = ResultArity(sig);
-    int param_arity = sig.length() - result_arity - 1;
+    int result_arity = i::wasm::SerializedSignatureHelper::ReturnCount(sig);
+    int param_arity = i::wasm::SerializedSignatureHelper::ParamCount(sig);
     ownvec<ValType> results = ownvec<ValType>::make_uninitialized(result_arity);
     ownvec<ValType> params = ownvec<ValType>::make_uninitialized(param_arity);
 
-    int i = 0;
-    for (; i < result_arity; ++i) {
-      results[i] = ValType::make(V8ValueTypeToWasm(sig.get(i)));
+    for (int i = 0; i < result_arity; ++i) {
+      results[i] = ValType::make(V8ValueTypeToWasm(
+          i::wasm::SerializedSignatureHelper::GetReturn(sig, i)));
     }
-    i++;  // Skip marker.
-    for (int p = 0; i < sig.length(); ++i, ++p) {
-      params[p] = ValType::make(V8ValueTypeToWasm(sig.get(i)));
+    for (int i = 0; i < param_arity; ++i) {
+      params[i] = ValType::make(V8ValueTypeToWasm(
+          i::wasm::SerializedSignatureHelper::GetParam(sig, i)));
     }
     return FuncType::make(std::move(params), std::move(results));
   }
 
-  static int ResultArity(i::PodArray<i::wasm::ValueType> sig) {
-    int count = 0;
-    for (; count < sig.length(); count++) {
-      if (sig.get(count) == kMarker) return count;
-    }
-    UNREACHABLE();
-  }
-
-  static int ParamArity(i::PodArray<i::wasm::ValueType> sig) {
-    return sig.length() - ResultArity(sig) - 1;
-  }
-
   static i::PodArray<i::wasm::ValueType> GetSig(
       i::Handle<i::JSFunction> function) {
-    return i::WasmCapiFunction::cast(*function).GetSerializedSignature();
+    return i::WasmCapiFunction::cast(*function)->GetSerializedSignature();
   }
 };
-
-// Explicit instantiation makes the linker happy for component builds of
-// wasm_api_tests.
-constexpr i::wasm::ValueType SignatureHelper::kMarker;
 
 auto make_func(Store* store_abs, FuncData* data) -> own<Func> {
   auto store = impl(store_abs);
@@ -1459,8 +1442,8 @@ auto make_func(Store* store_abs, FuncData* data) -> own<Func> {
       isolate, reinterpret_cast<i::Address>(&FuncData::v8_callback),
       embedder_data, SignatureHelper::Serialize(isolate, data->type.get()));
   i::WasmApiFunctionRef::cast(
-      function->shared().wasm_capi_function_data().internal().ref())
-      .set_callable(*function);
+      function->shared()->wasm_capi_function_data()->internal()->ref())
+      ->set_callable(*function);
   auto func = implement<Func>::type::make(store, function);
   return func;
 }
@@ -1491,33 +1474,37 @@ auto Func::type() const -> own<FuncType> {
   DCHECK(i::WasmExportedFunction::IsWasmExportedFunction(*func));
   i::Handle<i::WasmExportedFunction> function =
       i::Handle<i::WasmExportedFunction>::cast(func);
-  return FunctionSigToFuncType(
-      function->instance().module()->functions[function->function_index()].sig);
+  return FunctionSigToFuncType(function->instance()
+                                   ->module()
+                                   ->functions[function->function_index()]
+                                   .sig);
 }
 
 auto Func::param_arity() const -> size_t {
   i::Handle<i::JSFunction> func = impl(this)->v8_object();
   if (i::WasmCapiFunction::IsWasmCapiFunction(*func)) {
-    return SignatureHelper::ParamArity(SignatureHelper::GetSig(func));
+    return i::wasm::SerializedSignatureHelper::ParamCount(
+        SignatureHelper::GetSig(func));
   }
   DCHECK(i::WasmExportedFunction::IsWasmExportedFunction(*func));
   i::Handle<i::WasmExportedFunction> function =
       i::Handle<i::WasmExportedFunction>::cast(func);
   const i::wasm::FunctionSig* sig =
-      function->instance().module()->functions[function->function_index()].sig;
+      function->instance()->module()->functions[function->function_index()].sig;
   return sig->parameter_count();
 }
 
 auto Func::result_arity() const -> size_t {
   i::Handle<i::JSFunction> func = impl(this)->v8_object();
   if (i::WasmCapiFunction::IsWasmCapiFunction(*func)) {
-    return SignatureHelper::ResultArity(SignatureHelper::GetSig(func));
+    return i::wasm::SerializedSignatureHelper::ReturnCount(
+        SignatureHelper::GetSig(func));
   }
   DCHECK(i::WasmExportedFunction::IsWasmExportedFunction(*func));
   i::Handle<i::WasmExportedFunction> function =
       i::Handle<i::WasmExportedFunction>::cast(func);
   const i::wasm::FunctionSig* sig =
-      function->instance().module()->functions[function->function_index()].sig;
+      function->instance()->module()->functions[function->function_index()].sig;
   return sig->return_count();
 }
 
@@ -1570,11 +1557,11 @@ void PushArgs(const i::wasm::FunctionSig* sig, const Val args[],
         break;
       case i::wasm::kRef:
       case i::wasm::kRefNull:
-        // TODO(7748): Make sure this works for all heap types.
+        // TODO(14034): Make sure this works for all heap types.
         packer->Push(WasmRefToV8(store->i_isolate(), args[i].ref())->ptr());
         break;
       case i::wasm::kS128:
-        // TODO(7748): Implement.
+        // TODO(14034): Implement.
         UNIMPLEMENTED();
       case i::wasm::kRtt:
       case i::wasm::kI8:
@@ -1606,14 +1593,14 @@ void PopArgs(const i::wasm::FunctionSig* sig, Val results[],
         break;
       case i::wasm::kRef:
       case i::wasm::kRefNull: {
-        // TODO(7748): Make sure this works for all heap types.
+        // TODO(14034): Make sure this works for all heap types.
         i::Address raw = packer->Pop<i::Address>();
         i::Handle<i::Object> obj(i::Object(raw), store->i_isolate());
         results[i] = Val(V8RefValueToWasm(store, obj));
         break;
       }
       case i::wasm::kS128:
-        // TODO(7748): Implement.
+        // TODO(14034): Implement.
         UNIMPLEMENTED();
       case i::wasm::kRtt:
       case i::wasm::kI8:
@@ -1627,7 +1614,8 @@ void PopArgs(const i::wasm::FunctionSig* sig, Val results[],
 
 own<Trap> CallWasmCapiFunction(i::WasmCapiFunctionData data, const Val args[],
                                Val results[]) {
-  FuncData* func_data = i::Managed<FuncData>::cast(data.embedder_data()).raw();
+  FuncData* func_data =
+      i::Managed<FuncData>::cast(data->embedder_data())->raw();
   if (func_data->kind == FuncData::kCallback) {
     return (func_data->callback)(args, results);
   }
@@ -1663,7 +1651,7 @@ auto Func::call(const Val args[], Val results[]) const -> own<Trap> {
   v8::Isolate::Scope isolate_scope(store->isolate());
   i::HandleScope handle_scope(isolate);
   i::Object raw_function_data =
-      func->v8_object()->shared().function_data(v8::kAcquireLoad);
+      func->v8_object()->shared()->function_data(v8::kAcquireLoad);
 
   // WasmCapiFunctions can be called directly.
   if (raw_function_data.IsWasmCapiFunctionData()) {
@@ -1681,7 +1669,7 @@ auto Func::call(const Val args[], Val results[]) const -> own<Trap> {
       instance->module()->functions[function_index].sig;
   PrepareFunctionData(isolate, function_data, sig, instance->module());
   i::Handle<i::Code> wrapper_code(function_data->c_wrapper_code(), isolate);
-  i::Address call_target = function_data->internal().call_target(isolate);
+  i::Address call_target = function_data->internal()->call_target(isolate);
 
   i::wasm::CWasmArgumentsPacker packer(function_data->packed_args_size());
   PushArgs(sig, args, &packer, store);
@@ -1690,11 +1678,11 @@ auto Func::call(const Val args[], Val results[]) const -> own<Trap> {
   if (function_index <
       static_cast<int>(instance->module()->num_imported_functions)) {
     object_ref = i::handle(
-        instance->imported_function_refs().get(function_index), isolate);
+        instance->imported_function_refs()->get(function_index), isolate);
     if (object_ref->IsWasmApiFunctionRef()) {
       i::JSFunction jsfunc = i::JSFunction::cast(
-          i::WasmApiFunctionRef::cast(*object_ref).callable());
-      i::Object data = jsfunc.shared().function_data(v8::kAcquireLoad);
+          i::WasmApiFunctionRef::cast(*object_ref)->callable());
+      i::Object data = jsfunc->shared()->function_data(v8::kAcquireLoad);
       if (data.IsWasmCapiFunctionData()) {
         return CallWasmCapiFunction(i::WasmCapiFunctionData::cast(data), args,
                                     results);
@@ -1726,7 +1714,7 @@ auto Func::call(const Val args[], Val results[]) const -> own<Trap> {
 i::Address FuncData::v8_callback(i::Address host_data_foreign,
                                  i::Address argv) {
   FuncData* self =
-      i::Managed<FuncData>::cast(i::Object(host_data_foreign)).raw();
+      i::Managed<FuncData>::cast(i::Object(host_data_foreign))->raw();
   StoreImpl* store = impl(self->store);
   i::Isolate* isolate = store->i_isolate();
   v8::Isolate::Scope isolate_scope(store->isolate());
@@ -1874,15 +1862,14 @@ auto Global::get() const -> Val {
       return Val(v8_global->GetF64());
     case i::wasm::kRef:
     case i::wasm::kRefNull: {
-      // TODO(7748): Handle types other than funcref and externref if needed.
+      // TODO(14034): Handle types other than funcref and externref if needed.
       StoreImpl* store = impl(this)->store();
       i::HandleScope scope(store->i_isolate());
       v8::Isolate::Scope isolate_scope(store->isolate());
       i::Handle<i::Object> result = v8_global->GetRef();
       if (result->IsWasmInternalFunction()) {
-        result =
-            handle(i::Handle<i::WasmInternalFunction>::cast(result)->external(),
-                   v8_global->GetIsolate());
+        result = i::WasmInternalFunction::GetOrCreateExternal(
+            i::Handle<i::WasmInternalFunction>::cast(result));
       }
       if (result->IsWasmNull()) {
         result = v8_global->GetIsolate()->factory()->null_value();
@@ -1890,7 +1877,7 @@ auto Global::get() const -> Val {
       return Val(V8RefValueToWasm(store, result));
     }
     case i::wasm::kS128:
-      // TODO(7748): Implement these.
+      // TODO(14034): Implement these.
       UNIMPLEMENTED();
     case i::wasm::kRtt:
     case i::wasm::kI8:
@@ -1988,7 +1975,7 @@ auto Table::make(Store* store_abs, const TableType* type, const Ref* ref)
       // This doesn't call WasmTableObject::Set because the table has
       // just been created, so it can't be imported by any instances
       // yet that might require updating.
-      DCHECK_EQ(table_obj->dispatch_tables().length(), 0);
+      DCHECK_EQ(table_obj->dispatch_tables()->length(), 0);
       backing_store->set(i, *init);
     }
   }
@@ -2014,7 +2001,7 @@ auto Table::type() const -> own<TableType> {
   return TableType::make(ValType::make(kind), Limits(min, max));
 }
 
-// TODO(7748): Handle types other than funcref and externref if needed.
+// TODO(14034): Handle types other than funcref and externref if needed.
 auto Table::get(size_t index) const -> own<Ref> {
   i::Handle<i::WasmTableObject> table = impl(this)->v8_object();
   if (index >= static_cast<size_t>(table->current_length())) return own<Ref>();
@@ -2023,8 +2010,8 @@ auto Table::get(size_t index) const -> own<Ref> {
   i::Handle<i::Object> result =
       i::WasmTableObject::Get(isolate, table, static_cast<uint32_t>(index));
   if (result->IsWasmInternalFunction()) {
-    result = handle(
-        i::Handle<i::WasmInternalFunction>::cast(result)->external(), isolate);
+    result = i::WasmInternalFunction::GetOrCreateExternal(
+        i::Handle<i::WasmInternalFunction>::cast(result));
   }
   if (result->IsWasmNull()) {
     result = isolate->factory()->null_value();
@@ -2099,10 +2086,11 @@ auto Memory::make(Store* store_abs, const MemoryType* type) -> own<Memory> {
     if (maximum < minimum) return nullptr;
     if (maximum > i::wasm::kSpecMaxMemory32Pages) return nullptr;
   }
-  // TODO(wasm+): Support shared memory.
+  // TODO(wasm+): Support shared memory and memory64.
   i::SharedFlag shared = i::SharedFlag::kNotShared;
+  i::WasmMemoryFlag mem_type = i::WasmMemoryFlag::kWasmMemory32;
   i::Handle<i::WasmMemoryObject> memory_obj;
-  if (!i::WasmMemoryObject::New(isolate, minimum, maximum, shared)
+  if (!i::WasmMemoryObject::New(isolate, minimum, maximum, shared, mem_type)
            .ToHandle(&memory_obj)) {
     return own<Memory>();
   }
@@ -2111,7 +2099,7 @@ auto Memory::make(Store* store_abs, const MemoryType* type) -> own<Memory> {
 
 auto Memory::type() const -> own<MemoryType> {
   i::Handle<i::WasmMemoryObject> memory = impl(this)->v8_object();
-  uint32_t min = static_cast<uint32_t>(memory->array_buffer().byte_length() /
+  uint32_t min = static_cast<uint32_t>(memory->array_buffer()->byte_length() /
                                        i::wasm::kWasmPageSize);
   uint32_t max =
       memory->has_maximum_pages() ? memory->maximum_pages() : 0xFFFFFFFFu;
@@ -2120,16 +2108,16 @@ auto Memory::type() const -> own<MemoryType> {
 
 auto Memory::data() const -> byte_t* {
   return reinterpret_cast<byte_t*>(
-      impl(this)->v8_object()->array_buffer().backing_store());
+      impl(this)->v8_object()->array_buffer()->backing_store());
 }
 
 auto Memory::data_size() const -> size_t {
-  return impl(this)->v8_object()->array_buffer().byte_length();
+  return impl(this)->v8_object()->array_buffer()->byte_length();
 }
 
 auto Memory::size() const -> pages_t {
   return static_cast<pages_t>(
-      impl(this)->v8_object()->array_buffer().byte_length() /
+      impl(this)->v8_object()->array_buffer()->byte_length() /
       i::wasm::kWasmPageSize);
 }
 
@@ -2463,8 +2451,7 @@ inline auto is_empty(T* p) -> bool {
 
 // Byte vectors
 
-using byte = byte_t;
-WASM_DEFINE_VEC_PLAIN(byte, byte)
+WASM_DEFINE_VEC_PLAIN(byte, byte_t)
 
 ///////////////////////////////////////////////////////////////////////////////
 // Runtime Environment

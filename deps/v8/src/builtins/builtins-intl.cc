@@ -188,7 +188,7 @@ namespace {
 Handle<JSFunction> CreateBoundFunction(Isolate* isolate,
                                        Handle<JSObject> object, Builtin builtin,
                                        int len) {
-  Handle<NativeContext> native_context(isolate->context().native_context(),
+  Handle<NativeContext> native_context(isolate->context()->native_context(),
                                        isolate);
   Handle<Context> context = isolate->factory()->NewBuiltinContext(
       native_context,
@@ -721,47 +721,111 @@ BUILTIN(LocalePrototypeMinimize) {
   RETURN_RESULT_OR_FAILURE(isolate, JSLocale::Minimize(isolate, locale));
 }
 
+BUILTIN(LocalePrototypeGetCalendars) {
+  HandleScope scope(isolate);
+  isolate->CountUsage(v8::Isolate::UseCounterFeature::kLocaleInfoFunctions);
+  CHECK_RECEIVER(JSLocale, locale, "Intl.Locale.prototype.getCalendars");
+  RETURN_RESULT_OR_FAILURE(isolate, JSLocale::GetCalendars(isolate, locale));
+}
+
+BUILTIN(LocalePrototypeGetCollations) {
+  HandleScope scope(isolate);
+  isolate->CountUsage(v8::Isolate::UseCounterFeature::kLocaleInfoFunctions);
+  CHECK_RECEIVER(JSLocale, locale, "Intl.Locale.prototype.getCollations");
+  RETURN_RESULT_OR_FAILURE(isolate, JSLocale::GetCollations(isolate, locale));
+}
+
+BUILTIN(LocalePrototypeGetHourCycles) {
+  HandleScope scope(isolate);
+  isolate->CountUsage(v8::Isolate::UseCounterFeature::kLocaleInfoFunctions);
+  CHECK_RECEIVER(JSLocale, locale, "Intl.Locale.prototype.getHourCycles");
+  RETURN_RESULT_OR_FAILURE(isolate, JSLocale::GetHourCycles(isolate, locale));
+}
+
+BUILTIN(LocalePrototypeGetNumberingSystems) {
+  HandleScope scope(isolate);
+  isolate->CountUsage(v8::Isolate::UseCounterFeature::kLocaleInfoFunctions);
+  CHECK_RECEIVER(JSLocale, locale, "Intl.Locale.prototype.getNumberingSystems");
+  RETURN_RESULT_OR_FAILURE(isolate,
+                           JSLocale::GetNumberingSystems(isolate, locale));
+}
+
+BUILTIN(LocalePrototypeGetTextInfo) {
+  HandleScope scope(isolate);
+  isolate->CountUsage(v8::Isolate::UseCounterFeature::kLocaleInfoFunctions);
+  CHECK_RECEIVER(JSLocale, locale, "Intl.Locale.prototype.getTextInfo");
+  RETURN_RESULT_OR_FAILURE(isolate, JSLocale::GetTextInfo(isolate, locale));
+}
+
+BUILTIN(LocalePrototypeGetTimeZones) {
+  HandleScope scope(isolate);
+  isolate->CountUsage(v8::Isolate::UseCounterFeature::kLocaleInfoFunctions);
+  CHECK_RECEIVER(JSLocale, locale, "Intl.Locale.prototype.getTimeZones");
+  RETURN_RESULT_OR_FAILURE(isolate, JSLocale::GetTimeZones(isolate, locale));
+}
+
+BUILTIN(LocalePrototypeGetWeekInfo) {
+  HandleScope scope(isolate);
+  isolate->CountUsage(v8::Isolate::UseCounterFeature::kLocaleInfoFunctions);
+  CHECK_RECEIVER(JSLocale, locale, "Intl.Locale.prototype.getWeekInfo");
+  RETURN_RESULT_OR_FAILURE(isolate, JSLocale::GetWeekInfo(isolate, locale));
+}
+
 BUILTIN(LocalePrototypeCalendars) {
   HandleScope scope(isolate);
+  isolate->CountUsage(
+      v8::Isolate::UseCounterFeature::kLocaleInfoObsoletedGetters);
   CHECK_RECEIVER(JSLocale, locale, "Intl.Locale.prototype.calendars");
-  RETURN_RESULT_OR_FAILURE(isolate, JSLocale::Calendars(isolate, locale));
+  RETURN_RESULT_OR_FAILURE(isolate, JSLocale::GetCalendars(isolate, locale));
 }
 
 BUILTIN(LocalePrototypeCollations) {
   HandleScope scope(isolate);
+  isolate->CountUsage(
+      v8::Isolate::UseCounterFeature::kLocaleInfoObsoletedGetters);
   CHECK_RECEIVER(JSLocale, locale, "Intl.Locale.prototype.collations");
-  RETURN_RESULT_OR_FAILURE(isolate, JSLocale::Collations(isolate, locale));
+  RETURN_RESULT_OR_FAILURE(isolate, JSLocale::GetCollations(isolate, locale));
 }
 
 BUILTIN(LocalePrototypeHourCycles) {
   HandleScope scope(isolate);
+  isolate->CountUsage(
+      v8::Isolate::UseCounterFeature::kLocaleInfoObsoletedGetters);
   CHECK_RECEIVER(JSLocale, locale, "Intl.Locale.prototype.hourCycles");
-  RETURN_RESULT_OR_FAILURE(isolate, JSLocale::HourCycles(isolate, locale));
+  RETURN_RESULT_OR_FAILURE(isolate, JSLocale::GetHourCycles(isolate, locale));
 }
 
 BUILTIN(LocalePrototypeNumberingSystems) {
   HandleScope scope(isolate);
+  isolate->CountUsage(
+      v8::Isolate::UseCounterFeature::kLocaleInfoObsoletedGetters);
   CHECK_RECEIVER(JSLocale, locale, "Intl.Locale.prototype.numberingSystems");
   RETURN_RESULT_OR_FAILURE(isolate,
-                           JSLocale::NumberingSystems(isolate, locale));
+                           JSLocale::GetNumberingSystems(isolate, locale));
 }
 
 BUILTIN(LocalePrototypeTextInfo) {
   HandleScope scope(isolate);
+  isolate->CountUsage(
+      v8::Isolate::UseCounterFeature::kLocaleInfoObsoletedGetters);
   CHECK_RECEIVER(JSLocale, locale, "Intl.Locale.prototype.textInfo");
-  RETURN_RESULT_OR_FAILURE(isolate, JSLocale::TextInfo(isolate, locale));
+  RETURN_RESULT_OR_FAILURE(isolate, JSLocale::GetTextInfo(isolate, locale));
 }
 
 BUILTIN(LocalePrototypeTimeZones) {
   HandleScope scope(isolate);
+  isolate->CountUsage(
+      v8::Isolate::UseCounterFeature::kLocaleInfoObsoletedGetters);
   CHECK_RECEIVER(JSLocale, locale, "Intl.Locale.prototype.timeZones");
-  RETURN_RESULT_OR_FAILURE(isolate, JSLocale::TimeZones(isolate, locale));
+  RETURN_RESULT_OR_FAILURE(isolate, JSLocale::GetTimeZones(isolate, locale));
 }
 
 BUILTIN(LocalePrototypeWeekInfo) {
   HandleScope scope(isolate);
+  isolate->CountUsage(
+      v8::Isolate::UseCounterFeature::kLocaleInfoObsoletedGetters);
   CHECK_RECEIVER(JSLocale, locale, "Intl.Locale.prototype.weekInfo");
-  RETURN_RESULT_OR_FAILURE(isolate, JSLocale::WeekInfo(isolate, locale));
+  RETURN_RESULT_OR_FAILURE(isolate, JSLocale::GetWeekInfo(isolate, locale));
 }
 
 BUILTIN(RelativeTimeFormatSupportedLocalesOf) {
@@ -907,13 +971,13 @@ bool IsFastLocale(Object maybe_locale) {
     return false;
   }
   auto locale = SeqOneByteString::cast(maybe_locale);
-  uint8_t* chars = locale.GetChars(no_gc);
-  if (locale.length() < 2 || !std::isalpha(chars[0]) ||
+  uint8_t* chars = locale->GetChars(no_gc);
+  if (locale->length() < 2 || !std::isalpha(chars[0]) ||
       !std::isalpha(chars[1])) {
     return false;
   }
-  if (locale.length() != 2 &&
-      (locale.length() != 5 || chars[2] != '-' || !std::isalpha(chars[3]) ||
+  if (locale->length() != 2 &&
+      (locale->length() != 5 || chars[2] != '-' || !std::isalpha(chars[3]) ||
        !std::isalpha(chars[4]))) {
     return false;
   }
@@ -1111,7 +1175,7 @@ BUILTIN(CollatorInternalCompare) {
                                      Object::ToString(isolate, y));
 
   // 7. Return CompareStrings(collator, X, Y).
-  icu::Collator* icu_collator = collator->icu_collator().raw();
+  icu::Collator* icu_collator = collator->icu_collator()->raw();
   CHECK_NOT_NULL(icu_collator);
   return Smi::FromInt(
       Intl::CompareStrings(isolate, *icu_collator, string_x, string_y));
@@ -1194,7 +1258,7 @@ BUILTIN(SegmentsPrototypeIterator) {
   CHECK_RECEIVER(JSSegments, segments, method_name);
   RETURN_RESULT_OR_FAILURE(
       isolate,
-      JSSegmentIterator::Create(isolate, segments->icu_break_iterator().raw(),
+      JSSegmentIterator::Create(isolate, segments->icu_break_iterator()->raw(),
                                 segments->granularity()));
 }
 

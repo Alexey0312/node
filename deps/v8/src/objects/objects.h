@@ -151,6 +151,11 @@
 //               - ExternalTwoByteInternalizedString
 //         - Symbol
 //       - Oddball
+//         - Null
+//         - Undefined
+//         - Boolean
+//           - True
+//           - False
 //     - Context
 //       - NativeContext
 //     - Cell
@@ -302,6 +307,11 @@ class Object : public TaggedImpl<HeapObjectReferenceType::STRONG, Address> {
   constexpr Object() : TaggedImpl(kNullAddress) {}
   explicit constexpr Object(Address ptr) : TaggedImpl(ptr) {}
 
+  /* For every object, add a `->` operator which returns a pointer to this     \
+     object. This will allow smoother transition between T and Tagged<T>. */
+  Object* operator->() { return this; }
+  const Object* operator->() const { return this; }
+
   V8_INLINE bool IsTaggedIndex() const;
 
   // Whether the object is in the RO heap and the RO heap is shared, or in the
@@ -320,6 +330,10 @@ class Object : public TaggedImpl<HeapObjectReferenceType::STRONG, Address> {
 #undef IS_TYPE_FUNCTION_DECL
   V8_INLINE bool IsNumber(ReadOnlyRoots roots) const;
 
+  // A wrapper around IsHole to make it easier to distinguish from specific hole
+  // checks (e.g. IsTheHole).
+  V8_INLINE bool IsAnyHole(PtrComprCageBase cage_base) const;
+
 // Oddball checks are faster when they are raw pointer comparisons, so the
 // isolate/read-only roots overloads should be preferred where possible.
 #define IS_TYPE_FUNCTION_DECL(Type, Value, _)           \
@@ -328,6 +342,7 @@ class Object : public TaggedImpl<HeapObjectReferenceType::STRONG, Address> {
   V8_INLINE bool Is##Type(ReadOnlyRoots roots) const;   \
   V8_INLINE bool Is##Type() const;
   ODDBALL_LIST(IS_TYPE_FUNCTION_DECL)
+  HOLE_LIST(IS_TYPE_FUNCTION_DECL)
   IS_TYPE_FUNCTION_DECL(NullOrUndefined, , /* unused */)
 #undef IS_TYPE_FUNCTION_DECL
 
@@ -669,8 +684,10 @@ class Object : public TaggedImpl<HeapObjectReferenceType::STRONG, Address> {
 
   V8_EXPORT_PRIVATE void ShortPrint(std::ostream& os) const;
 
-  inline static Object cast(Object object) { return object; }
-  inline static Object unchecked_cast(Object object) { return object; }
+  inline static constexpr Object cast(Object object) { return object; }
+  inline static constexpr Object unchecked_cast(Object object) {
+    return object;
+  }
 
   // Layout description.
   static const int kHeaderSize = 0;  // Object does not take up any space.
@@ -705,68 +722,6 @@ class Object : public TaggedImpl<HeapObjectReferenceType::STRONG, Address> {
   struct Comparer {
     bool operator()(const Object a, const Object b) const { return a < b; }
   };
-
-  template <class T, typename std::enable_if<std::is_arithmetic<T>::value ||
-                                                 std::is_enum<T>::value,
-                                             int>::type = 0>
-  inline T ReadField(size_t offset) const {
-    return ReadMaybeUnalignedValue<T>(field_address(offset));
-  }
-
-  template <class T, typename std::enable_if<std::is_arithmetic<T>::value ||
-                                                 std::is_enum<T>::value,
-                                             int>::type = 0>
-  inline void WriteField(size_t offset, T value) const {
-    return WriteMaybeUnalignedValue<T>(field_address(offset), value);
-  }
-
-  // Atomically reads a field using relaxed memory ordering. Can only be used
-  // with integral types whose size is <= kTaggedSize (to guarantee alignment).
-  template <class T,
-            typename std::enable_if<(std::is_arithmetic<T>::value ||
-                                     std::is_enum<T>::value) &&
-                                        !std::is_floating_point<T>::value,
-                                    int>::type = 0>
-  inline T Relaxed_ReadField(size_t offset) const;
-
-  // Atomically writes a field using relaxed memory ordering. Can only be used
-  // with integral types whose size is <= kTaggedSize (to guarantee alignment).
-  template <class T,
-            typename std::enable_if<(std::is_arithmetic<T>::value ||
-                                     std::is_enum<T>::value) &&
-                                        !std::is_floating_point<T>::value,
-                                    int>::type = 0>
-  inline void Relaxed_WriteField(size_t offset, T value);
-
-  //
-  // SandboxedPointer_t field accessors.
-  //
-  inline Address ReadSandboxedPointerField(size_t offset,
-                                           PtrComprCageBase cage_base) const;
-  inline void WriteSandboxedPointerField(size_t offset,
-                                         PtrComprCageBase cage_base,
-                                         Address value);
-  inline void WriteSandboxedPointerField(size_t offset, Isolate* isolate,
-                                         Address value);
-
-  //
-  // BoundedSize field accessors.
-  //
-  inline size_t ReadBoundedSizeField(size_t offset) const;
-  inline void WriteBoundedSizeField(size_t offset, size_t value);
-
-  //
-  // ExternalPointer_t field accessors.
-  //
-  template <ExternalPointerTag tag>
-  inline void InitExternalPointerField(size_t offset, Isolate* isolate,
-                                       Address value);
-  template <ExternalPointerTag tag>
-  inline Address ReadExternalPointerField(size_t offset,
-                                          Isolate* isolate) const;
-  template <ExternalPointerTag tag>
-  inline void WriteExternalPointerField(size_t offset, Isolate* isolate,
-                                        Address value);
 
   // If the receiver is the JSGlobalObject, the store was contextual. In case
   // the property did not exist yet on the global object itself, we have to
@@ -803,9 +758,8 @@ class Object : public TaggedImpl<HeapObjectReferenceType::STRONG, Address> {
   inline bool CanBeHeldWeakly() const;
 
  protected:
-  inline Address field_address(size_t offset) const {
-    return ptr() + offset - kHeapObjectTag;
-  }
+  struct SkipTypeCheckTag {};
+  explicit constexpr Object(Address ptr, SkipTypeCheckTag) : Object(ptr) {}
 
  private:
   friend class CompressedObjectSlot;
@@ -902,6 +856,8 @@ class MapWord {
   // collection.  Only valid during a scavenge collection (specifically,
   // when all map words are heap object pointers, i.e. not during a full GC).
   inline bool IsForwardingAddress() const;
+
+  V8_EXPORT_PRIVATE static bool IsMapOrForwarded(Map map);
 
   // Create a map word from a forwarding address.
   static inline MapWord FromForwardingAddress(HeapObject map_word_host,

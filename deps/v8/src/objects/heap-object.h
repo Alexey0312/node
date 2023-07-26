@@ -9,9 +9,6 @@
 #include "src/objects/instance-type.h"
 #include "src/objects/objects.h"
 #include "src/objects/tagged-field.h"
-#include "src/roots/roots.h"
-#include "src/torque/runtime-macro-shims.h"
-#include "src/torque/runtime-support.h"
 
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
@@ -21,6 +18,9 @@ namespace internal {
 
 class Heap;
 class PrimitiveHeapObject;
+class ExternalPointerSlot;
+template <typename T>
+class Tagged;
 
 // HeapObject is the superclass for all classes describing heap allocated
 // objects.
@@ -113,6 +113,7 @@ class HeapObject : public Object {
   V8_INLINE bool Is##Type(ReadOnlyRoots roots) const;   \
   V8_INLINE bool Is##Type() const;
   ODDBALL_LIST(IS_TYPE_FUNCTION_DECL)
+  HOLE_LIST(IS_TYPE_FUNCTION_DECL)
   IS_TYPE_FUNCTION_DECL(NullOrUndefined, , /* unused */)
 #undef IS_TYPE_FUNCTION_DECL
 
@@ -125,9 +126,10 @@ class HeapObject : public Object {
   V8_INLINE bool IsJSObjectThatCanBeTrackedAsPrototype() const;
 
   // Converts an address to a HeapObject pointer.
+  // TODO(leszeks): Move to Tagged<HeapObject>
   static inline HeapObject FromAddress(Address address) {
     DCHECK_TAG_ALIGNED(address);
-    return HeapObject(address + kHeapObjectTag);
+    return HeapObject::unchecked_cast(Object(address + kHeapObjectTag));
   }
 
   // Returns the address of this HeapObject.
@@ -140,6 +142,9 @@ class HeapObject : public Object {
 
   template <typename ObjectVisitor>
   inline void IterateFast(PtrComprCageBase cage_base, ObjectVisitor* v);
+
+  template <typename ObjectVisitor>
+  inline void IterateFast(Map map, ObjectVisitor* v);
 
   template <typename ObjectVisitor>
   inline void IterateFast(Map map, int object_size, ObjectVisitor* v);
@@ -172,13 +177,90 @@ class HeapObject : public Object {
   // GC internal.
   V8_EXPORT_PRIVATE int SizeFromMap(Map map) const;
 
+  template <class T, typename std::enable_if<std::is_arithmetic<T>::value ||
+                                                 std::is_enum<T>::value,
+                                             int>::type = 0>
+  inline T ReadField(size_t offset) const {
+    return ReadMaybeUnalignedValue<T>(field_address(offset));
+  }
+
+  template <class T, typename std::enable_if<std::is_arithmetic<T>::value ||
+                                                 std::is_enum<T>::value,
+                                             int>::type = 0>
+  inline void WriteField(size_t offset, T value) const {
+    return WriteMaybeUnalignedValue<T>(field_address(offset), value);
+  }
+
+  // Atomically reads a field using relaxed memory ordering. Can only be used
+  // with integral types whose size is <= kTaggedSize (to guarantee alignment).
+  template <class T,
+            typename std::enable_if<(std::is_arithmetic<T>::value ||
+                                     std::is_enum<T>::value) &&
+                                        !std::is_floating_point<T>::value,
+                                    int>::type = 0>
+  inline T Relaxed_ReadField(size_t offset) const;
+
+  // Atomically writes a field using relaxed memory ordering. Can only be used
+  // with integral types whose size is <= kTaggedSize (to guarantee alignment).
+  template <class T,
+            typename std::enable_if<(std::is_arithmetic<T>::value ||
+                                     std::is_enum<T>::value) &&
+                                        !std::is_floating_point<T>::value,
+                                    int>::type = 0>
+  inline void Relaxed_WriteField(size_t offset, T value);
+
+  //
+  // SandboxedPointer_t field accessors.
+  //
+  inline Address ReadSandboxedPointerField(size_t offset,
+                                           PtrComprCageBase cage_base) const;
+  inline void WriteSandboxedPointerField(size_t offset,
+                                         PtrComprCageBase cage_base,
+                                         Address value);
+  inline void WriteSandboxedPointerField(size_t offset, Isolate* isolate,
+                                         Address value);
+
+  //
+  // BoundedSize field accessors.
+  //
+  inline size_t ReadBoundedSizeField(size_t offset) const;
+  inline void WriteBoundedSizeField(size_t offset, size_t value);
+
+  //
+  // ExternalPointer_t field accessors.
+  //
+  template <ExternalPointerTag tag>
+  inline void InitExternalPointerField(size_t offset, Isolate* isolate,
+                                       Address value);
+  template <ExternalPointerTag tag>
+  inline Address ReadExternalPointerField(size_t offset,
+                                          Isolate* isolate) const;
+  template <ExternalPointerTag tag>
+  inline void WriteExternalPointerField(size_t offset, Isolate* isolate,
+                                        Address value);
+
+  template <ExternalPointerTag tag>
+  inline void WriteLazilyInitializedExternalPointerField(size_t offset,
+                                                         Isolate* isolate,
+                                                         Address value);
+
+  inline void ResetLazilyInitializedExternalPointerField(size_t offset);
+
+  //
+  // CodePointer field accessors.
+  //
+  inline void InitCodePointerField(size_t offset, Isolate* isolate,
+                                   Address value);
+  inline Address ReadCodePointerField(size_t offset) const;
+  inline void WriteCodePointerField(size_t offset, Address value);
+
   // Returns the field at offset in obj, as a read/write Object reference.
   // Does no checking, and is safe to use during GC, while maps are invalid.
   // Does not invoke write barrier, so should only be assigned to
   // during marking GC.
   inline ObjectSlot RawField(int byte_offset) const;
   inline MaybeObjectSlot RawMaybeWeakField(int byte_offset) const;
-  inline CodeObjectSlot RawCodeField(int byte_offset) const;
+  inline InstructionStreamSlot RawInstructionStreamField(int byte_offset) const;
   inline ExternalPointerSlot RawExternalPointerField(int byte_offset) const;
 
   DECL_CAST(HeapObject)
@@ -243,12 +325,11 @@ class HeapObject : public Object {
   inline Address GetFieldAddress(int field_offset) const;
 
  protected:
-  // Special-purpose constructor for subclasses that have fast paths where
-  // their ptr() is a Smi.
-  enum class AllowInlineSmiStorage { kRequireHeapObjectTag, kAllowBeingASmi };
-  inline HeapObject(Address ptr, AllowInlineSmiStorage allow_smi);
-
   OBJECT_CONSTRUCTORS(HeapObject, Object);
+
+  inline Address field_address(size_t offset) const {
+    return ptr() + offset - kHeapObjectTag;
+  }
 
  private:
   enum class VerificationMode {

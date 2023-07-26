@@ -74,7 +74,7 @@ RUNTIME_FUNCTION(Runtime_EnqueueMicrotask) {
   Handle<CallableTask> microtask = isolate->factory()->NewCallableTask(
       function, handle(function->native_context(), isolate));
   MicrotaskQueue* microtask_queue =
-      function->native_context().microtask_queue();
+      function->native_context()->microtask_queue();
   if (microtask_queue) microtask_queue->EnqueueMicrotask(*microtask);
   return ReadOnlyRoots(isolate).undefined_value();
 }
@@ -140,7 +140,7 @@ RUNTIME_FUNCTION(Runtime_RejectPromise) {
   DCHECK_EQ(3, args.length());
   Handle<JSPromise> promise = args.at<JSPromise>(0);
   Handle<Object> reason = args.at(1);
-  Handle<Oddball> debug_event = args.at<Oddball>(2);
+  Handle<Boolean> debug_event = args.at<Boolean>(2);
   return *JSPromise::Reject(promise, reason,
                             debug_event->BooleanValue(isolate));
 }

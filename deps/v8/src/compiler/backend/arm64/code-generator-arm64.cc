@@ -64,9 +64,13 @@ class Arm64OperandConverter final : public InstructionOperandConverter {
 
   size_t OutputCount() { return instr_->OutputCount(); }
 
-  DoubleRegister OutputFloat32Register() { return OutputDoubleRegister().S(); }
+  DoubleRegister OutputFloat32Register(size_t index = 0) {
+    return OutputDoubleRegister(index).S();
+  }
 
-  DoubleRegister OutputFloat64Register() { return OutputDoubleRegister(); }
+  DoubleRegister OutputFloat64Register(size_t index = 0) {
+    return OutputDoubleRegister(index);
+  }
 
   DoubleRegister OutputSimd128Register() { return OutputDoubleRegister().Q(); }
 
@@ -104,9 +108,11 @@ class Arm64OperandConverter final : public InstructionOperandConverter {
     return ToOperand32(instr_->InputAt(index));
   }
 
-  Register OutputRegister64() { return OutputRegister(); }
+  Register OutputRegister64(size_t index = 0) { return OutputRegister(index); }
 
-  Register OutputRegister32() { return OutputRegister().W(); }
+  Register OutputRegister32(size_t index = 0) {
+    return OutputRegister(index).W();
+  }
 
   Register TempRegister32(size_t index) {
     return ToRegister(instr_->TempAt(index)).W();
@@ -426,18 +432,7 @@ class WasmOutOfLineTrap : public OutOfLineCode {
       __ Ret();
     } else {
       gen_->AssembleSourcePosition(instr_);
-      // A direct call to a wasm runtime stub defined in this module.
-      // Just encode the stub index. This will be patched when the code
-      // is added to the native module and copied into wasm code space.
-      if (gen_->IsWasm() || PointerCompressionIsEnabled()) {
-        __ Call(static_cast<Address>(trap_id), RelocInfo::WASM_STUB_CALL);
-      } else {
-        // For wasm traps inlined into JavaScript force indirect call if pointer
-        // compression is disabled as it can't be guaranteed that the built-in's
-        // address is close enough for a near call.
-        __ IndirectCall(static_cast<Address>(trap_id),
-                        RelocInfo::WASM_STUB_CALL);
-      }
+      __ Call(static_cast<Address>(trap_id), RelocInfo::WASM_STUB_CALL);
       ReferenceMap* reference_map =
           gen_->zone()->New<ReferenceMap>(gen_->zone());
       gen_->RecordSafepoint(reference_map);
@@ -775,7 +770,11 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
     case kArchCallBuiltinPointer: {
       DCHECK(!instr->InputAt(0)->IsImmediate());
       Register builtin_index = i.InputRegister(0);
-      __ CallBuiltinByIndex(builtin_index);
+      Register target =
+          instr->HasCallDescriptorFlag(CallDescriptor::kFixedTargetRegister)
+              ? kJavaScriptCallCodeStartRegister
+              : builtin_index;
+      __ CallBuiltinByIndex(builtin_index, target);
       RecordCallPosition(instr);
       frame_access_state()->ClearSPDelta();
       break;
@@ -1977,6 +1976,11 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
       EmitOOLTrapIfNeeded(zone(), this, opcode, instr, __ pc_offset());
       __ Str(i.InputOrZeroRegister32(0), i.MemoryOperand(1));
       break;
+    case kArm64StrWPair:
+      EmitOOLTrapIfNeeded(zone(), this, opcode, instr, __ pc_offset());
+      __ Stp(i.InputOrZeroRegister32(0), i.InputOrZeroRegister32(1),
+             i.MemoryOperand(2));
+      break;
     case kArm64Ldr:
       EmitOOLTrapIfNeeded(zone(), this, opcode, instr, __ pc_offset());
       __ Ldr(i.OutputRegister(), i.MemoryOperand());
@@ -2003,6 +2007,11 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
     case kArm64Str:
       EmitOOLTrapIfNeeded(zone(), this, opcode, instr, __ pc_offset());
       __ Str(i.InputOrZeroRegister64(0), i.MemoryOperand(1));
+      break;
+    case kArm64StrPair:
+      EmitOOLTrapIfNeeded(zone(), this, opcode, instr, __ pc_offset());
+      __ Stp(i.InputOrZeroRegister64(0), i.InputOrZeroRegister64(1),
+             i.MemoryOperand(2));
       break;
     case kArm64StrCompressTagged:
       EmitOOLTrapIfNeeded(zone(), this, opcode, instr, __ pc_offset());
@@ -2594,19 +2603,7 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
       SIMD_BINOP_LANE_SIZE_CASE(kArm64IGtU, Cmhi);
       SIMD_BINOP_LANE_SIZE_CASE(kArm64IGeU, Cmhs);
     case kArm64I32x4BitMask: {
-      UseScratchRegisterScope scope(masm());
-      Register dst = i.OutputRegister32();
-      VRegister src = i.InputSimd128Register(0);
-      VRegister tmp = scope.AcquireQ();
-      VRegister mask = scope.AcquireQ();
-
-      __ Sshr(tmp.V4S(), src.V4S(), 31);
-      // Set i-th bit of each lane i. When AND with tmp, the lanes that
-      // are signed will have i-th bit set, unsigned will be 0.
-      __ Movi(mask.V2D(), 0x0000'0008'0000'0004, 0x0000'0002'0000'0001);
-      __ And(tmp.V16B(), mask.V16B(), tmp.V16B());
-      __ Addv(tmp.S(), tmp.V4S());
-      __ Mov(dst.W(), tmp.V4S(), 0);
+      __ I32x4BitMask(i.OutputRegister32(), i.InputSimd128Register(0));
       break;
     }
     case kArm64I32x4DotI16x8S: {
@@ -2712,19 +2709,7 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
       SIMD_BINOP_LANE_SIZE_CASE(kArm64ISubSatU, Uqsub);
       SIMD_BINOP_CASE(kArm64I16x8Q15MulRSatS, Sqrdmulh, 8H);
     case kArm64I16x8BitMask: {
-      UseScratchRegisterScope scope(masm());
-      Register dst = i.OutputRegister32();
-      VRegister src = i.InputSimd128Register(0);
-      VRegister tmp = scope.AcquireQ();
-      VRegister mask = scope.AcquireQ();
-
-      __ Sshr(tmp.V8H(), src.V8H(), 15);
-      // Set i-th bit of each lane i. When AND with tmp, the lanes that
-      // are signed will have i-th bit set, unsigned will be 0.
-      __ Movi(mask.V2D(), 0x0080'0040'0020'0010, 0x0008'0004'0002'0001);
-      __ And(tmp.V16B(), mask.V16B(), tmp.V16B());
-      __ Addv(tmp.H(), tmp.V8H());
-      __ Mov(dst.W(), tmp.V8H(), 0);
+      __ I16x8BitMask(i.OutputRegister32(), i.InputSimd128Register(0));
       break;
     }
     case kArm64I8x16Shl: {
@@ -2768,32 +2753,13 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
       break;
     }
     case kArm64I8x16BitMask: {
-      UseScratchRegisterScope scope(masm());
-      Register dst = i.OutputRegister32();
-      VRegister src = i.InputSimd128Register(0);
-      VRegister tmp = scope.AcquireQ();
-      VRegister mask = scope.AcquireQ();
-
-      // Set i-th bit of each lane i. When AND with tmp, the lanes that
-      // are signed will have i-th bit set, unsigned will be 0.
-      __ Sshr(tmp.V16B(), src.V16B(), 7);
-      __ Movi(mask.V2D(), 0x8040'2010'0804'0201);
-      __ And(tmp.V16B(), mask.V16B(), tmp.V16B());
-      __ Ext(mask.V16B(), tmp.V16B(), tmp.V16B(), 8);
-      __ Zip1(tmp.V16B(), tmp.V16B(), mask.V16B());
-      __ Addv(tmp.H(), tmp.V8H());
-      __ Mov(dst.W(), tmp.V8H(), 0);
+      __ I8x16BitMask(i.OutputRegister32(), i.InputSimd128Register(0));
       break;
     }
     case kArm64S128Const: {
       uint64_t imm1 = make_uint64(i.InputUint32(1), i.InputUint32(0));
       uint64_t imm2 = make_uint64(i.InputUint32(3), i.InputUint32(2));
       __ Movi(i.OutputSimd128Register().V16B(), imm2, imm1);
-      break;
-    }
-    case kArm64S128Zero: {
-      VRegister dst = i.OutputSimd128Register().V16B();
-      __ Eor(dst, dst, dst);
       break;
     }
       SIMD_BINOP_CASE(kArm64S128And, And, 16B);
@@ -3136,8 +3102,10 @@ void CodeGenerator::AssembleArchBoolean(Instruction* instr,
 void CodeGenerator::AssembleArchSelect(Instruction* instr,
                                        FlagsCondition condition) {
   Arm64OperandConverter i(this, instr);
+  // The result register is always the last output of the instruction.
+  size_t output_index = instr->OutputCount() - 1;
   MachineRepresentation rep =
-      LocationOperand::cast(instr->OutputAt(0))->representation();
+      LocationOperand::cast(instr->OutputAt(output_index))->representation();
   Condition cc = FlagsConditionToCondition(condition);
   // We don't now how many inputs were consumed by the condition, so we have to
   // calculate the indices of the last two inputs.
@@ -3145,12 +3113,12 @@ void CodeGenerator::AssembleArchSelect(Instruction* instr,
   size_t true_value_index = instr->InputCount() - 2;
   size_t false_value_index = instr->InputCount() - 1;
   if (rep == MachineRepresentation::kFloat32) {
-    __ Fcsel(i.OutputFloat32Register(),
+    __ Fcsel(i.OutputFloat32Register(output_index),
              i.InputFloat32Register(true_value_index),
              i.InputFloat32Register(false_value_index), cc);
   } else {
     DCHECK_EQ(rep, MachineRepresentation::kFloat64);
-    __ Fcsel(i.OutputFloat64Register(),
+    __ Fcsel(i.OutputFloat64Register(output_index),
              i.InputFloat64Register(true_value_index),
              i.InputFloat64Register(false_value_index), cc);
   }
@@ -3558,12 +3526,13 @@ AllocatedOperand CodeGenerator::Push(InstructionOperand* source) {
 }
 
 void CodeGenerator::Pop(InstructionOperand* dest, MachineRepresentation rep) {
-  int new_slots = RoundUp<2>(ElementSizeInPointers(rep));
-  frame_access_state()->IncreaseSPDelta(-new_slots);
+  int dropped_slots = RoundUp<2>(ElementSizeInPointers(rep));
   Arm64OperandConverter g(this, nullptr);
   if (dest->IsRegister()) {
+    frame_access_state()->IncreaseSPDelta(-dropped_slots);
     __ Pop(g.ToRegister(dest), padreg);
   } else if (dest->IsStackSlot()) {
+    frame_access_state()->IncreaseSPDelta(-dropped_slots);
     UseScratchRegisterScope temps(masm());
     Register scratch = temps.AcquireX();
     __ Pop(scratch, padreg);
@@ -3572,12 +3541,13 @@ void CodeGenerator::Pop(InstructionOperand* dest, MachineRepresentation rep) {
     int last_frame_slot_id =
         frame_access_state_->frame()->GetTotalFrameSlotCount() - 1;
     int sp_delta = frame_access_state_->sp_delta();
-    int slot_id = last_frame_slot_id + sp_delta + new_slots;
+    int slot_id = last_frame_slot_id + sp_delta;
     AllocatedOperand stack_slot(LocationOperand::STACK_SLOT, rep, slot_id);
     AssembleMove(&stack_slot, dest);
-    __ Add(sp, sp, Operand(new_slots * kSystemPointerSize));
+    frame_access_state()->IncreaseSPDelta(-dropped_slots);
+    __ Add(sp, sp, Operand(dropped_slots * kSystemPointerSize));
   }
-  temp_slots_ -= new_slots;
+  temp_slots_ -= dropped_slots;
 }
 
 void CodeGenerator::PopTempStackSlots() {
@@ -3692,16 +3662,16 @@ void CodeGenerator::SetPendingMove(MoveOperands* move) {
       move_cycle_.scratch_regs.set(temp);
     }
     int64_t src_offset = src.offset();
-    unsigned src_size = CalcLSDataSize(LDR_x);
+    unsigned src_size_log2 = CalcLSDataSizeLog2(LDR_x);
     int64_t dst_offset = dst.offset();
-    unsigned dst_size = CalcLSDataSize(STR_x);
+    unsigned dst_size_log2 = CalcLSDataSizeLog2(STR_x);
     // Offset doesn't fit into the immediate field so the assembler will emit
     // two instructions and use a second temp register.
     if ((src.IsImmediateOffset() &&
-         !masm()->IsImmLSScaled(src_offset, src_size) &&
+         !masm()->IsImmLSScaled(src_offset, src_size_log2) &&
          !masm()->IsImmLSUnscaled(src_offset)) ||
         (dst.IsImmediateOffset() &&
-         !masm()->IsImmLSScaled(dst_offset, dst_size) &&
+         !masm()->IsImmLSScaled(dst_offset, dst_size_log2) &&
          !masm()->IsImmLSUnscaled(dst_offset))) {
       Register temp = temps.AcquireX();
       move_cycle_.scratch_regs.set(temp);

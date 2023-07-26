@@ -18,6 +18,7 @@
 #include "src/objects/call-site-info-inl.h"
 #include "src/objects/foreign-inl.h"
 #include "src/objects/js-array-inl.h"
+#include "src/objects/property-descriptor.h"
 #include "src/objects/struct-inl.h"
 #include "src/parsing/parse-info.h"
 #include "src/parsing/parsing.h"
@@ -176,15 +177,15 @@ void MessageHandler::ReportMessageNoExceptions(
       HandleScope scope(isolate);
       if (global_listeners->get(i).IsUndefined(isolate)) continue;
       FixedArray listener = FixedArray::cast(global_listeners->get(i));
-      Foreign callback_obj = Foreign::cast(listener.get(0));
+      Foreign callback_obj = Foreign::cast(listener->get(0));
       int32_t message_levels =
-          static_cast<int32_t>(Smi::ToInt(listener.get(2)));
+          static_cast<int32_t>(Smi::ToInt(listener->get(2)));
       if (!(message_levels & error_level)) {
         continue;
       }
       v8::MessageCallback callback =
-          FUNCTION_CAST<v8::MessageCallback>(callback_obj.foreign_address());
-      Handle<Object> callback_data(listener.get(1), isolate);
+          FUNCTION_CAST<v8::MessageCallback>(callback_obj->foreign_address());
+      Handle<Object> callback_data(listener->get(1), isolate);
       {
         RCS_SCOPE(isolate, RuntimeCallCounterId::kMessageListenerCallback);
         // Do not allow exceptions to propagate.
@@ -304,11 +305,9 @@ MaybeHandle<Object> ErrorUtils::FormatStackTrace(Isolate* isolate,
 
   const bool in_recursion = isolate->formatting_stack_trace();
   const bool has_overflowed = i::StackLimitCheck{isolate}.HasOverflowed();
-  Handle<Context> error_context;
+  Handle<NativeContext> error_context;
   if (!in_recursion && !has_overflowed &&
       error->GetCreationContext().ToHandle(&error_context)) {
-    DCHECK(error_context->IsNativeContext());
-
     if (isolate->HasPrepareStackTraceCallback()) {
       PrepareStackTraceScope scope(isolate);
 
@@ -349,7 +348,7 @@ MaybeHandle<Object> ErrorUtils::FormatStackTrace(Isolate* isolate,
         if (V8_UNLIKELY(error->IsJSGlobalObject())) {
           // Pass global proxy instead of global object.
           argv[0] =
-              handle(JSGlobalObject::cast(*error).global_proxy(), isolate);
+              handle(JSGlobalObject::cast(*error)->global_proxy(), isolate);
         } else {
           argv[0] = error;
         }
@@ -712,7 +711,7 @@ Handle<JSObject> ErrorUtils::MakeGenericError(
 
   Handle<Object> no_caller;
   // The call below can't fail because constructor is a builtin.
-  DCHECK(constructor->shared().HasBuiltinId());
+  DCHECK(constructor->shared()->HasBuiltinId());
   return ErrorUtils::Construct(isolate, constructor, constructor, msg, options,
                                mode, no_caller, StackTraceCollection::kEnabled)
       .ToHandleChecked();
@@ -1003,19 +1002,51 @@ Object ErrorUtils::ThrowLoadFromNullOrUndefined(Isolate* isolate,
 }
 
 // static
+bool ErrorUtils::HasErrorStackSymbolOwnProperty(Isolate* isolate,
+                                                Handle<JSObject> object) {
+  // TODO(v8:5962): consider adding object->IsWasmExceptionPackage() here
+  // once it's guaranteed that WasmExceptionPackage has |error_stack_symbol|
+  // property.
+  Handle<Name> name = isolate->factory()->error_stack_symbol();
+  if (object->IsJSError()) {
+    DCHECK(JSReceiver::HasOwnProperty(isolate, object, name).FromMaybe(false));
+    return true;
+  }
+  return JSReceiver::HasOwnProperty(isolate, object, name).FromMaybe(false);
+}
+
+// static
+ErrorUtils::StackPropertyLookupResult ErrorUtils::GetErrorStackProperty(
+    Isolate* isolate, Handle<JSReceiver> maybe_error_object) {
+  LookupIterator it(isolate, LookupIterator::PROTOTYPE_CHAIN_SKIP_INTERCEPTOR,
+                    maybe_error_object,
+                    isolate->factory()->error_stack_symbol());
+  Handle<Object> result = JSReceiver::GetDataProperty(&it);
+
+  if (!it.IsFound()) {
+    return {MaybeHandle<JSObject>{}, isolate->factory()->undefined_value()};
+  }
+  return {it.GetHolder<JSObject>(), result};
+}
+
+// static
 MaybeHandle<Object> ErrorUtils::GetFormattedStack(
-    Isolate* isolate, Handle<JSObject> error_object) {
+    Isolate* isolate, Handle<JSObject> maybe_error_object) {
   TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("v8.stack_trace"), __func__);
 
-  Handle<Object> error_stack = JSReceiver::GetDataProperty(
-      isolate, error_object, isolate->factory()->error_stack_symbol());
-  if (error_stack->IsErrorStackData()) {
+  ErrorUtils::StackPropertyLookupResult lookup =
+      ErrorUtils::GetErrorStackProperty(isolate, maybe_error_object);
+
+  if (lookup.error_stack->IsErrorStackData()) {
     Handle<ErrorStackData> error_stack_data =
-        Handle<ErrorStackData>::cast(error_stack);
+        Handle<ErrorStackData>::cast(lookup.error_stack);
     if (error_stack_data->HasFormattedStack()) {
       return handle(error_stack_data->formatted_stack(), isolate);
     }
     ErrorStackData::EnsureStackFrameInfos(isolate, error_stack_data);
+
+    Handle<JSObject> error_object =
+        lookup.error_stack_symbol_holder.ToHandleChecked();
     Handle<Object> formatted_stack;
     ASSIGN_RETURN_ON_EXCEPTION(
         isolate, formatted_stack,
@@ -1026,12 +1057,14 @@ MaybeHandle<Object> ErrorUtils::GetFormattedStack(
     return formatted_stack;
   }
 
-  if (error_stack->IsFixedArray()) {
+  if (lookup.error_stack->IsFixedArray()) {
+    Handle<JSObject> error_object =
+        lookup.error_stack_symbol_holder.ToHandleChecked();
     Handle<Object> formatted_stack;
     ASSIGN_RETURN_ON_EXCEPTION(
         isolate, formatted_stack,
         FormatStackTrace(isolate, error_object,
-                         Handle<FixedArray>::cast(error_stack)),
+                         Handle<FixedArray>::cast(lookup.error_stack)),
         Object);
     RETURN_ON_EXCEPTION(
         isolate,
@@ -1043,18 +1076,24 @@ MaybeHandle<Object> ErrorUtils::GetFormattedStack(
     return formatted_stack;
   }
 
-  return error_stack;
+  return lookup.error_stack;
 }
 
 // static
 void ErrorUtils::SetFormattedStack(Isolate* isolate,
-                                   Handle<JSObject> error_object,
+                                   Handle<JSObject> maybe_error_object,
                                    Handle<Object> formatted_stack) {
-  Handle<Object> error_stack = JSReceiver::GetDataProperty(
-      isolate, error_object, isolate->factory()->error_stack_symbol());
-  if (error_stack->IsErrorStackData()) {
+  ErrorUtils::StackPropertyLookupResult lookup =
+      ErrorUtils::GetErrorStackProperty(isolate, maybe_error_object);
+
+  Handle<JSObject> error_object;
+  // Do nothing in case |maybe_error_object| is not an Error, i.e. its
+  // prototype doesn't contain objects with |error_stack_symbol| property.
+  if (!lookup.error_stack_symbol_holder.ToHandle(&error_object)) return;
+
+  if (lookup.error_stack->IsErrorStackData()) {
     Handle<ErrorStackData> error_stack_data =
-        Handle<ErrorStackData>::cast(error_stack);
+        Handle<ErrorStackData>::cast(lookup.error_stack);
     ErrorStackData::EnsureStackFrameInfos(isolate, error_stack_data);
     error_stack_data->set_formatted_stack(*formatted_stack);
   } else {
@@ -1064,6 +1103,40 @@ void ErrorUtils::SetFormattedStack(Isolate* isolate,
                           Just(ShouldThrow::kThrowOnError))
         .Check();
   }
+}
+
+// static
+MaybeHandle<Object> ErrorUtils::CaptureStackTrace(Isolate* isolate,
+                                                  Handle<JSObject> object,
+                                                  FrameSkipMode mode,
+                                                  Handle<Object> caller) {
+  Factory* factory = isolate->factory();
+  Handle<Name> name = factory->stack_string();
+
+  // Explicitly check for frozen objects to simplify things since we need to
+  // add both "stack" and "error_stack_symbol" properties in one go.
+  if (!JSObject::IsExtensible(isolate, object)) {
+    return isolate->Throw<Object>(
+        factory->NewTypeError(MessageTemplate::kDefineDisallowed, name));
+  }
+
+  // Add the stack accessors.
+  PropertyDescriptor desc;
+  desc.set_enumerable(false);
+  desc.set_configurable(true);
+  desc.set_get(factory->error_stack_getter_fun_template());
+  desc.set_set(factory->error_stack_setter_fun_template());
+  Maybe<bool> success = JSReceiver::DefineOwnProperty(
+      isolate, object, name, &desc, Just(kThrowOnError));
+
+  MAYBE_RETURN(success, {});
+
+  // Collect the stack trace and store it in |object|'s private
+  // "error_stack_symbol" property.
+  RETURN_ON_EXCEPTION(
+      isolate, isolate->CaptureAndSetErrorStack(object, mode, caller), Object);
+
+  return isolate->factory()->undefined_value();
 }
 
 }  // namespace internal

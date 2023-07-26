@@ -597,10 +597,10 @@ bool ISOYearMonthWithinLimits(int32_t year, int32_t month) {
 #define THROW_INVALID_RANGE(T) \
   THROW_NEW_ERROR(isolate, NEW_TEMPORAL_INVALID_ARG_RANGE_ERROR(), T);
 
-#define CONSTRUCTOR(name)                                                    \
-  Handle<JSFunction>(                                                        \
-      JSFunction::cast(                                                      \
-          isolate->context().native_context().temporal_##name##_function()), \
+#define CONSTRUCTOR(name)                                                      \
+  Handle<JSFunction>(                                                          \
+      JSFunction::cast(                                                        \
+          isolate->context()->native_context()->temporal_##name##_function()), \
       isolate)
 
 // #sec-temporal-systemutcepochnanoseconds
@@ -2160,7 +2160,7 @@ MaybeHandle<T> FromFields(Isolate* isolate, Handle<JSReceiver> calendar,
       isolate, result, Execution::Call(isolate, function, calendar, 2, argv),
       T);
   if ((!result->IsHeapObject()) ||
-      HeapObject::cast(*result).map().instance_type() != type) {
+      HeapObject::cast(*result)->map()->instance_type() != type) {
     THROW_NEW_ERROR(isolate, NEW_TEMPORAL_INVALID_ARG_TYPE_ERROR(), T);
   }
   return Handle<T>::cast(result);
@@ -2290,7 +2290,7 @@ MaybeHandle<JSTemporalInstant> ToTemporalInstant(Isolate* isolate,
   if (item->IsJSTemporalZonedDateTime()) {
     // i. Return ! CreateTemporalInstant(item.[[Nanoseconds]]).
     Handle<BigInt> nanoseconds =
-        handle(JSTemporalZonedDateTime::cast(*item).nanoseconds(), isolate);
+        handle(JSTemporalZonedDateTime::cast(*item)->nanoseconds(), isolate);
     return temporal::CreateTemporalInstant(isolate, nanoseconds)
         .ToHandleChecked();
   }
@@ -7956,8 +7956,7 @@ MaybeHandle<Oddball> JSTemporalDuration::Blank(
         duration->minutes().Number(), duration->seconds().Number(),
         duration->milliseconds().Number(), duration->microseconds().Number(),
         duration->nanoseconds().Number()}});
-  return sign == 0 ? isolate->factory()->true_value()
-                   : isolate->factory()->false_value();
+  return isolate->factory()->ToBoolean(sign == 0);
 }
 
 namespace {
@@ -18086,7 +18085,8 @@ MaybeHandle<JSTemporalInstant> JSTemporalInstant::From(Isolate* isolate,
   if (item->IsJSTemporalInstant()) {
     // a. Return ? CreateTemporalInstant(item.[[Nanoseconds]]).
     return temporal::CreateTemporalInstant(
-        isolate, handle(JSTemporalInstant::cast(*item).nanoseconds(), isolate));
+        isolate,
+        handle(JSTemporalInstant::cast(*item)->nanoseconds(), isolate));
   }
   // 2. Return ? ToTemporalInstant(item).
   return ToTemporalInstant(isolate, item, "Temporal.Instant.from");

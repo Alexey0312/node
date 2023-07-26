@@ -58,7 +58,7 @@ class MutableBigInt : public FreshlyAllocatedBigInt {
       AllocationType allocation = AllocationType::kYoung);
   static Handle<BigInt> NewFromInt(Isolate* isolate, int value);
   static Handle<BigInt> NewFromDouble(Isolate* isolate, double value);
-  void InitializeDigits(int length, byte value = 0);
+  void InitializeDigits(int length, uint8_t value = 0);
   static Handle<MutableBigInt> Copy(Isolate* isolate,
                                     Handle<BigIntBase> source);
   template <typename IsolateT>
@@ -153,7 +153,7 @@ bigint::Digits GetDigits(BigIntBase bigint) {
   return bigint::Digits(
       reinterpret_cast<bigint::digit_t*>(
           bigint.ptr() + BigIntBase::kDigitsOffset - kHeapObjectTag),
-      bigint.length());
+      bigint->length());
 }
 bigint::Digits GetDigits(Handle<BigIntBase> bigint) {
   return GetDigits(*bigint);
@@ -163,7 +163,7 @@ bigint::RWDigits GetRWDigits(MutableBigInt bigint) {
   return bigint::RWDigits(
       reinterpret_cast<bigint::digit_t*>(
           bigint.ptr() + BigIntBase::kDigitsOffset - kHeapObjectTag),
-      bigint.length());
+      bigint->length());
 }
 bigint::RWDigits GetRWDigits(Handle<MutableBigInt> bigint) {
   return GetRWDigits(*bigint);
@@ -295,7 +295,7 @@ Handle<MutableBigInt> MutableBigInt::Copy(Isolate* isolate,
   return result;
 }
 
-void MutableBigInt::InitializeDigits(int length, byte value) {
+void MutableBigInt::InitializeDigits(int length, uint8_t value) {
   memset(reinterpret_cast<void*>(ptr() + kDigitsOffset - kHeapObjectTag), value,
          length * kDigitSize);
 }
@@ -315,31 +315,30 @@ Handle<BigInt> MutableBigInt::MakeImmutable(Handle<MutableBigInt> result) {
 
 void MutableBigInt::Canonicalize(MutableBigInt result) {
   // Check if we need to right-trim any leading zero-digits.
-  int old_length = result.length();
+  int old_length = result->length();
   int new_length = old_length;
-  while (new_length > 0 && result.digit(new_length - 1) == 0) new_length--;
+  while (new_length > 0 && result->digit(new_length - 1) == 0) new_length--;
   int to_trim = old_length - new_length;
   if (to_trim != 0) {
-    Heap* heap = result.GetHeap();
+    Heap* heap = result->GetHeap();
     if (!heap->IsLargeObject(result)) {
       int old_size = ALIGN_TO_ALLOCATION_ALIGNMENT(BigInt::SizeFor(old_length));
       int new_size = ALIGN_TO_ALLOCATION_ALIGNMENT(BigInt::SizeFor(new_length));
       heap->NotifyObjectSizeChange(result, old_size, new_size,
-                                   ClearRecordedSlots::kNo,
-                                   UpdateInvalidatedObjectSize::kNo);
+                                   ClearRecordedSlots::kNo);
     }
-    result.set_length(new_length, kReleaseStore);
+    result->set_length(new_length, kReleaseStore);
 
     // Canonicalize -0n.
     if (new_length == 0) {
-      result.set_sign(false);
+      result->set_sign(false);
       // TODO(jkummerow): If we cache a canonical 0n, return that here.
     }
   }
-  DCHECK_IMPLIES(result.length() > 0,
-                 result.digit(result.length() - 1) != 0);  // MSD is non-zero.
+  DCHECK_IMPLIES(result->length() > 0,
+                 result->digit(result->length() - 1) != 0);  // MSD is non-zero.
   // Callers that don't require trimming must ensure this themselves.
-  DCHECK_IMPLIES(result.length() == 0, result.sign() == false);
+  DCHECK_IMPLIES(result->length() == 0, result->sign() == false);
 }
 
 template <typename IsolateT>
@@ -621,10 +620,10 @@ ComparisonResult BigInt::CompareToBigInt(Handle<BigInt> x, Handle<BigInt> y) {
 }
 
 bool BigInt::EqualToBigInt(BigInt x, BigInt y) {
-  if (x.sign() != y.sign()) return false;
-  if (x.length() != y.length()) return false;
-  for (int i = 0; i < x.length(); i++) {
-    if (x.digit(i) != y.digit(i)) return false;
+  if (x->sign() != y->sign()) return false;
+  if (x->length() != y->length()) return false;
+  for (int i = 0; i < x->length(); i++) {
+    if (x->digit(i) != y->digit(i)) return false;
   }
   return true;
 }
@@ -927,16 +926,15 @@ void RightTrimString(Isolate* isolate, Handle<SeqOneByteString> string,
                      int chars_allocated, int chars_written) {
   DCHECK_LE(chars_written, chars_allocated);
   if (chars_written == chars_allocated) return;
-  string->set_length(chars_written, kReleaseStore);
   int string_size =
       ALIGN_TO_ALLOCATION_ALIGNMENT(SeqOneByteString::SizeFor(chars_allocated));
   int needed_size =
       ALIGN_TO_ALLOCATION_ALIGNMENT(SeqOneByteString::SizeFor(chars_written));
   if (needed_size < string_size && !isolate->heap()->IsLargeObject(*string)) {
     isolate->heap()->NotifyObjectSizeChange(*string, string_size, needed_size,
-                                            ClearRecordedSlots::kNo,
-                                            UpdateInvalidatedObjectSize::kNo);
+                                            ClearRecordedSlots::kNo);
   }
+  string->set_length(chars_written, kReleaseStore);
 }
 
 }  // namespace
@@ -1064,7 +1062,7 @@ MaybeHandle<BigInt> BigInt::FromNumber(Isolate* isolate,
   if (number->IsSmi()) {
     return MutableBigInt::NewFromInt(isolate, Smi::ToInt(*number));
   }
-  double value = HeapNumber::cast(*number).value();
+  double value = HeapNumber::cast(*number)->value();
   if (!std::isfinite(value) || (DoubleToInteger(value) != value)) {
     THROW_NEW_ERROR(isolate,
                     NewRangeError(MessageTemplate::kBigIntFromNumber, number),
@@ -1440,10 +1438,10 @@ MaybeHandle<BigInt> BigInt::FromSerializedDigits(
   }
   if (bytelength % kDigitSize) {
     *digit = 0;
-    byte* digit_byte = reinterpret_cast<byte*>(digit);
+    uint8_t* digit_byte = reinterpret_cast<uint8_t*>(digit);
     digit_byte += sizeof(*digit) - 1;
-    const byte* digit_storage_byte =
-        reinterpret_cast<const byte*>(digit_storage);
+    const uint8_t* digit_storage_byte =
+        reinterpret_cast<const uint8_t*>(digit_storage);
     for (int i = 0; i < bytelength % kDigitSize; i++) {
       *digit_byte = *digit_storage_byte;
       digit_byte--;
@@ -1590,16 +1588,16 @@ void BigInt::ToWordsArray64(int* sign_bit, int* words64_count,
 
 uint64_t MutableBigInt::GetRawBits(BigIntBase x, bool* lossless) {
   if (lossless != nullptr) *lossless = true;
-  if (x.is_zero()) return 0;
-  int len = x.length();
+  if (x->is_zero()) return 0;
+  int len = x->length();
   static_assert(kDigitBits == 64 || kDigitBits == 32);
   if (lossless != nullptr && len > 64 / kDigitBits) *lossless = false;
-  uint64_t raw = static_cast<uint64_t>(x.digit(0));
+  uint64_t raw = static_cast<uint64_t>(x->digit(0));
   if (kDigitBits == 32 && len > 1) {
-    raw |= static_cast<uint64_t>(x.digit(1)) << 32;
+    raw |= static_cast<uint64_t>(x->digit(1)) << 32;
   }
   // Simulate two's complement. MSVC dislikes "-raw".
-  return x.sign() ? ((~raw) + 1u) : raw;
+  return x->sign() ? ((~raw) + 1u) : raw;
 }
 
 int64_t BigInt::AsInt64(bool* lossless) {
@@ -1700,7 +1698,7 @@ int32_t MutableBigInt_AbsoluteDivAndCanonicalize(Address result_addr,
   BigInt x = BigInt::cast(Object(x_addr));
   BigInt y = BigInt::cast(Object(y_addr));
   MutableBigInt result = MutableBigInt::cast(Object(result_addr));
-  DCHECK_GE(result.length(),
+  DCHECK_GE(result->length(),
             bigint::DivideResultLength(GetDigits(x), GetDigits(y)));
 
   Isolate* isolate;

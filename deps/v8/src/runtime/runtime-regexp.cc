@@ -38,14 +38,13 @@ uint32_t GetArgcForReplaceCallable(uint32_t num_captures,
                                    bool has_named_captures) {
   const uint32_t kAdditionalArgsWithoutNamedCaptures = 2;
   const uint32_t kAdditionalArgsWithNamedCaptures = 3;
-  if (num_captures > InstructionStream::kMaxArguments) return -1;
+  if (num_captures > Code::kMaxArguments) return -1;
   uint32_t argc = has_named_captures
                       ? num_captures + kAdditionalArgsWithNamedCaptures
                       : num_captures + kAdditionalArgsWithoutNamedCaptures;
-  static_assert(InstructionStream::kMaxArguments <
-                std::numeric_limits<uint32_t>::max() -
-                    kAdditionalArgsWithNamedCaptures);
-  return (argc > InstructionStream::kMaxArguments) ? -1 : argc;
+  static_assert(Code::kMaxArguments < std::numeric_limits<uint32_t>::max() -
+                                          kAdditionalArgsWithNamedCaptures);
+  return (argc > Code::kMaxArguments) ? -1 : argc;
 }
 
 // Looks up the capture of the given name. Returns the (1-based) numbered
@@ -56,17 +55,17 @@ int LookupNamedCapture(const std::function<bool(String)>& name_matches,
   // internalized strings.
 
   int maybe_capture_index = -1;
-  const int named_capture_count = capture_name_map.length() >> 1;
+  const int named_capture_count = capture_name_map->length() >> 1;
   for (int j = 0; j < named_capture_count; j++) {
     // The format of {capture_name_map} is documented at
     // JSRegExp::kIrregexpCaptureNameMapIndex.
     const int name_ix = j * 2;
     const int index_ix = j * 2 + 1;
 
-    String capture_name = String::cast(capture_name_map.get(name_ix));
+    String capture_name = String::cast(capture_name_map->get(name_ix));
     if (!name_matches(capture_name)) continue;
 
-    maybe_capture_index = Smi::ToInt(capture_name_map.get(index_ix));
+    maybe_capture_index = Smi::ToInt(capture_name_map->get(index_ix));
     break;
   }
 
@@ -469,8 +468,8 @@ void FindStringIndicesDispatch(Isolate* isolate, String subject, String pattern,
                                std::vector<int>* indices, unsigned int limit) {
   {
     DisallowGarbageCollection no_gc;
-    String::FlatContent subject_content = subject.GetFlatContent(no_gc);
-    String::FlatContent pattern_content = pattern.GetFlatContent(no_gc);
+    String::FlatContent subject_content = subject->GetFlatContent(no_gc);
+    String::FlatContent pattern_content = pattern->GetFlatContent(no_gc);
     DCHECK(subject_content.IsFlat());
     DCHECK(pattern_content.IsFlat());
     if (subject_content.IsOneByte()) {
@@ -553,7 +552,7 @@ V8_WARN_UNUSED_RESULT static Object StringReplaceGlobalAtomRegExpWithString(
   DCHECK_EQ(JSRegExp::ATOM, pattern_regexp->type_tag());
   String pattern = pattern_regexp->atom_pattern();
   int subject_len = subject->length();
-  int pattern_len = pattern.length();
+  int pattern_len = pattern->length();
   int replacement_len = replacement->length();
 
   FindStringIndicesDispatch(isolate, *subject, pattern, indices, 0xFFFFFFFF);
@@ -846,9 +845,9 @@ RUNTIME_FUNCTION(Runtime_StringSplit) {
   // Create JSArray of substrings separated by separator.
   int part_count = static_cast<int>(indices->size());
 
-  Handle<JSArray> result =
-      isolate->factory()->NewJSArray(PACKED_ELEMENTS, part_count, part_count,
-                                     INITIALIZE_ARRAY_ELEMENTS_WITH_HOLE);
+  Handle<JSArray> result = isolate->factory()->NewJSArray(
+      PACKED_ELEMENTS, part_count, part_count,
+      ArrayStorageAllocationMode::INITIALIZE_ARRAY_ELEMENTS_WITH_HOLE);
 
   DCHECK(result->HasObjectElements());
 
@@ -1031,7 +1030,7 @@ class MatchInfoBackedMatch : public String::Match {
                                       CaptureState* state) override {
     DCHECK(has_named_captures_);
     const int capture_index = LookupNamedCapture(
-        [=](String capture_name) { return capture_name.Equals(*name); },
+        [=](String capture_name) { return capture_name->Equals(*name); },
         *capture_name_map_);
 
     if (capture_index == -1) {
@@ -1200,7 +1199,7 @@ static Object SearchRegExpMultiple(Isolate* isolate, Handle<String> subject,
       std::unique_ptr<int32_t[]> last_match(new int32_t[capture_registers]);
       int32_t* raw_last_match = last_match.get();
       for (int i = 0; i < capture_registers; i++) {
-        raw_last_match[i] = Smi::ToInt(last_match_cache.get(i));
+        raw_last_match[i] = Smi::ToInt(last_match_cache->get(i));
       }
       Handle<FixedArray> cached_fixed_array =
           Handle<FixedArray>(FixedArray::cast(cached_answer), isolate);
@@ -1487,7 +1486,7 @@ RUNTIME_FUNCTION(Runtime_StringReplaceNonGlobalRegExpWithFunction) {
   Handle<JSReceiver> replace_obj = args.at<JSReceiver>(2);
 
   DCHECK(RegExpUtils::IsUnmodifiedRegExp(isolate, regexp));
-  DCHECK(replace_obj->map().is_callable());
+  DCHECK(replace_obj->map()->is_callable());
 
   Factory* factory = isolate->factory();
   Handle<RegExpMatchInfo> last_match_info = isolate->regexp_last_match_info();
@@ -2008,7 +2007,7 @@ RUNTIME_FUNCTION(Runtime_RegExpStringFromFlags) {
   HandleScope scope(isolate);
   DCHECK_EQ(1, args.length());
   auto regexp = JSRegExp::cast(args[0]);
-  Handle<String> flags = JSRegExp::StringFromFlags(isolate, regexp.flags());
+  Handle<String> flags = JSRegExp::StringFromFlags(isolate, regexp->flags());
   return *flags;
 }
 

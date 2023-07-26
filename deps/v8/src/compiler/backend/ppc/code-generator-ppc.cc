@@ -800,7 +800,7 @@ void CodeGenerator::BailoutIfDeoptimized() {
   int offset = InstructionStream::kCodeOffset - InstructionStream::kHeaderSize;
   __ LoadTaggedField(r11, MemOperand(kJavaScriptCallCodeStartRegister, offset),
                      r0);
-  __ LoadU16(r11, FieldMemOperand(r11, Code::kKindSpecificFlagsOffset), r0);
+  __ LoadU32(r11, FieldMemOperand(r11, Code::kFlagsOffset), r0);
   __ TestBit(r11, Code::kMarkedForDeoptimizationBit);
   __ Jump(BUILTIN_CODE(isolate(), CompileLazyDeoptimizedCode),
           RelocInfo::CODE_TARGET, ne, cr0);
@@ -833,7 +833,11 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
     case kArchCallBuiltinPointer: {
       DCHECK(!instr->InputAt(0)->IsImmediate());
       Register builtin_index = i.InputRegister(0);
-      __ CallBuiltinByIndex(builtin_index);
+      Register target =
+          instr->HasCallDescriptorFlag(CallDescriptor::kFixedTargetRegister)
+              ? kJavaScriptCallCodeStartRegister
+              : builtin_index;
+      __ CallBuiltinByIndex(builtin_index, target);
       RecordCallPosition(instr);
       frame_access_state()->ClearSPDelta();
       break;
@@ -2237,6 +2241,7 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
   V(I32x4Eq)               \
   V(I32x4GtS)              \
   V(I32x4GtU)              \
+  V(I32x4DotI16x8S)        \
   V(I16x8Add)              \
   V(I16x8Sub)              \
   V(I16x8Mul)              \
@@ -2254,6 +2259,7 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
   V(I16x8SConvertI32x4)    \
   V(I16x8UConvertI32x4)    \
   V(I16x8RoundingAverageU) \
+  V(I16x8Q15MulRSatS)      \
   V(I8x16Add)              \
   V(I8x16Sub)              \
   V(I8x16MinS)             \
@@ -2305,7 +2311,6 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
   V(I32x4ExtMulHighI16x8S)              \
   V(I32x4ExtMulLowI16x8U)               \
   V(I32x4ExtMulHighI16x8U)              \
-  V(I32x4DotI16x8S)                     \
   V(I16x8Ne)                            \
   V(I16x8GeS)                           \
   V(I16x8GeU)                           \
@@ -2313,7 +2318,6 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
   V(I16x8ExtMulHighI8x16S)              \
   V(I16x8ExtMulLowI8x16U)               \
   V(I16x8ExtMulHighI8x16U)              \
-  V(I16x8Q15MulRSatS)                   \
   V(I16x8DotI8x16S)                     \
   V(I8x16Ne)                            \
   V(I8x16GeS)                           \
@@ -3004,7 +3008,7 @@ void CodeGenerator::AssembleArchTableSwitch(Instruction* instr) {
   PPCOperandConverter i(this, instr);
   Register input = i.InputRegister(0);
   int32_t const case_count = static_cast<int32_t>(instr->InputCount() - 2);
-  Label** cases = zone()->NewArray<Label*>(case_count);
+  Label** cases = zone()->AllocateArray<Label*>(case_count);
   for (int32_t index = 0; index < case_count; ++index) {
     cases[index] = GetLabel(i.InputRpo(index + 2));
   }
@@ -3318,10 +3322,10 @@ AllocatedOperand CodeGenerator::Push(InstructionOperand* source) {
 }
 
 void CodeGenerator::Pop(InstructionOperand* dest, MachineRepresentation rep) {
-  int new_slots = ElementSizeInPointers(rep);
-  frame_access_state()->IncreaseSPDelta(-new_slots);
+  int dropped_slots = ElementSizeInPointers(rep);
   PPCOperandConverter g(this, nullptr);
   if (dest->IsFloatStackSlot() || dest->IsDoubleStackSlot()) {
+    frame_access_state()->IncreaseSPDelta(-dropped_slots);
     UseScratchRegisterScope temps(masm());
     Register scratch = temps.Acquire();
     __ Pop(scratch);
@@ -3330,12 +3334,13 @@ void CodeGenerator::Pop(InstructionOperand* dest, MachineRepresentation rep) {
     int last_frame_slot_id =
         frame_access_state_->frame()->GetTotalFrameSlotCount() - 1;
     int sp_delta = frame_access_state_->sp_delta();
-    int slot_id = last_frame_slot_id + sp_delta + new_slots;
+    int slot_id = last_frame_slot_id + sp_delta;
     AllocatedOperand stack_slot(LocationOperand::STACK_SLOT, rep, slot_id);
     AssembleMove(&stack_slot, dest);
-    __ addi(sp, sp, Operand(new_slots * kSystemPointerSize));
+    frame_access_state()->IncreaseSPDelta(-dropped_slots);
+    __ addi(sp, sp, Operand(dropped_slots * kSystemPointerSize));
   }
-  temp_slots_ -= new_slots;
+  temp_slots_ -= dropped_slots;
 }
 
 void CodeGenerator::PopTempStackSlots() {

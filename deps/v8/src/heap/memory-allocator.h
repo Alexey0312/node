@@ -14,6 +14,7 @@
 #include "include/v8-platform.h"
 #include "src/base/bounded-page-allocator.h"
 #include "src/base/export-template.h"
+#include "src/base/functional.h"
 #include "src/base/macros.h"
 #include "src/base/platform/mutex.h"
 #include "src/base/platform/semaphore.h"
@@ -42,9 +43,6 @@ class ReadOnlyPage;
 // pages for large object space.
 class MemoryAllocator {
  public:
-  using NormalPagesSet = std::unordered_set<const Page*>;
-  using LargePagesSet = std::set<const LargePage*>;
-
   // Unmapper takes care of concurrently unmapping and uncommitting memory
   // chunks.
   class Unmapper {
@@ -246,10 +244,6 @@ class MemoryAllocator {
   }
 #endif  // DEBUG
 
-  // Zaps a contiguous block of memory [start..(start+size)[ with
-  // a given zap value.
-  void ZapBlock(Address start, size_t size, uintptr_t zap_value);
-
   // Page allocator instance for allocating non-executable pages.
   // Guaranteed to be a valid pointer.
   v8::PageAllocator* data_page_allocator() { return data_page_allocator_; }
@@ -271,32 +265,18 @@ class MemoryAllocator {
 
   Address HandleAllocationFailure(Executability executable);
 
+#ifdef V8_ENABLE_CONSERVATIVE_STACK_SCANNING
   // Return the normal or large page that contains this address, if it is owned
   // by this heap, otherwise a nullptr.
-  V8_EXPORT_PRIVATE static const MemoryChunk* LookupChunkContainingAddress(
-      const NormalPagesSet& normal_pages, const LargePagesSet& large_page,
-      Address addr);
-  V8_EXPORT_PRIVATE const MemoryChunk* LookupChunkContainingAddress(
+  V8_EXPORT_PRIVATE const BasicMemoryChunk* LookupChunkContainingAddress(
       Address addr) const;
+#endif  // V8_ENABLE_CONSERVATIVE_STACK_SCANNING
 
   // Insert and remove normal and large pages that are owned by this heap.
   void RecordNormalPageCreated(const Page& page);
   void RecordNormalPageDestroyed(const Page& page);
   void RecordLargePageCreated(const LargePage& page);
   void RecordLargePageDestroyed(const LargePage& page);
-
-  std::pair<const NormalPagesSet, const LargePagesSet> SnapshotPageSetsUnsafe()
-      const {
-    return std::make_pair(normal_pages_, large_pages_);
-  }
-
-  std::pair<const NormalPagesSet, const LargePagesSet> SnapshotPageSetsSafe()
-      const {
-    // For shared heap, this method may be called by client isolates thus
-    // requiring a mutex.
-    base::MutexGuard guard(&pages_mutex_);
-    return SnapshotPageSetsUnsafe();
-  }
 
  private:
   // Used to store all data about MemoryChunk allocation, e.g. in
@@ -451,15 +431,23 @@ class MemoryAllocator {
 #ifdef DEBUG
   // Data structure to remember allocated executable memory chunks.
   // This data structure is used only in DCHECKs.
-  std::unordered_set<MemoryChunk*> executable_memory_;
+  std::unordered_set<MemoryChunk*, base::hash<MemoryChunk*>> executable_memory_;
   base::Mutex executable_memory_mutex_;
 #endif  // DEBUG
 
+#ifdef V8_ENABLE_CONSERVATIVE_STACK_SCANNING
   // Allocated normal and large pages are stored here, to be used during
-  // conservative stack scanning.
-  NormalPagesSet normal_pages_;
-  LargePagesSet large_pages_;
+  // conservative stack scanning. The normal page set is guaranteed to contain
+  // Page*, and the large page set is guaranteed to contain LargePage*. We will
+  // be looking up BasicMemoryChunk*, however, and we want to avoid pointer
+  // casts that are technically undefined behaviour.
+  std::unordered_set<const BasicMemoryChunk*,
+                     base::hash<const BasicMemoryChunk*>>
+      normal_pages_;
+  std::set<const BasicMemoryChunk*> large_pages_;
+
   mutable base::Mutex pages_mutex_;
+#endif  // V8_ENABLE_CONSERVATIVE_STACK_SCANNING
 
   V8_EXPORT_PRIVATE static size_t commit_page_size_;
   V8_EXPORT_PRIVATE static size_t commit_page_size_bits_;

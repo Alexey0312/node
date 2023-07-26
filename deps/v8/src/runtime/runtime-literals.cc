@@ -76,7 +76,7 @@ MaybeHandle<JSObject> JSObjectWalkVisitor<ContextObject>::StructureWalk(
     }
   }
 
-  if (object->map(isolate).is_deprecated()) {
+  if (object->map(isolate)->is_deprecated()) {
     base::SharedMutexGuard<base::kExclusive> mutex_guard(
         isolate->boilerplate_migration_access());
     JSObject::MigrateInstance(isolate, object);
@@ -104,8 +104,8 @@ MaybeHandle<JSObject> JSObjectWalkVisitor<ContextObject>::StructureWalk(
   if (!copy->IsJSArray(isolate)) {
     if (copy->HasFastProperties(isolate)) {
       Handle<DescriptorArray> descriptors(
-          copy->map(isolate).instance_descriptors(isolate), isolate);
-      for (InternalIndex i : copy->map(isolate).IterateOwnDescriptors()) {
+          copy->map(isolate)->instance_descriptors(isolate), isolate);
+      for (InternalIndex i : copy->map(isolate)->IterateOwnDescriptors()) {
         PropertyDetails details = descriptors->GetDetails(i);
         DCHECK_EQ(PropertyLocation::kField, details.location());
         DCHECK_EQ(PropertyKind::kData, details.kind());
@@ -120,7 +120,7 @@ MaybeHandle<JSObject> JSObjectWalkVisitor<ContextObject>::StructureWalk(
           if (copying) copy->FastPropertyAtPut(index, *value);
         } else if (copying && details.representation().IsDouble()) {
           uint64_t double_value =
-              HeapNumber::cast(raw).value_as_bits(kRelaxedLoad);
+              HeapNumber::cast(raw)->value_as_bits(kRelaxedLoad);
           auto value = isolate->factory()->NewHeapNumberFromBits(double_value);
           copy->FastPropertyAtPut(index, *value);
         }
@@ -154,7 +154,7 @@ MaybeHandle<JSObject> JSObjectWalkVisitor<ContextObject>::StructureWalk(
     }
 
     // Assume non-arrays don't end up having elements.
-    if (copy->elements(isolate).length() == 0) return copy;
+    if (copy->elements(isolate)->length() == 0) return copy;
   }
 
   // Deep copy own elements.
@@ -442,7 +442,7 @@ Handle<JSObject> CreateObjectLiteral(
     // TODO(cbruni): avoid making the boilerplate fast again, the clone stub
     // supports dict-mode objects directly.
     JSObject::MigrateSlowToFast(
-        boilerplate, boilerplate->map().UnusedPropertyFields(), "FastLiteral");
+        boilerplate, boilerplate->map()->UnusedPropertyFields(), "FastLiteral");
   }
   return boilerplate;
 }
@@ -523,15 +523,15 @@ MaybeHandle<JSObject> CreateLiteralWithoutAllocationSite(
 
 template <typename LiteralHelper>
 MaybeHandle<JSObject> CreateLiteral(Isolate* isolate,
-                                    MaybeHandle<FeedbackVector> maybe_vector,
+                                    Handle<HeapObject> maybe_vector,
                                     int literals_index,
                                     Handle<HeapObject> description, int flags) {
-  if (maybe_vector.is_null()) {
+  if (!maybe_vector->IsFeedbackVector()) {
+    DCHECK(maybe_vector->IsUndefined());
     return CreateLiteralWithoutAllocationSite<LiteralHelper>(
         isolate, description, flags);
   }
-
-  Handle<FeedbackVector> vector = maybe_vector.ToHandleChecked();
+  Handle<FeedbackVector> vector = Handle<FeedbackVector>::cast(maybe_vector);
   FeedbackSlot literals_slot(FeedbackVector::ToSlot(literals_index));
   CHECK(literals_slot.ToInt() < vector->length());
   Handle<Object> literal_site(vector->Get(literals_slot)->cast<Object>(),
@@ -587,37 +587,9 @@ RUNTIME_FUNCTION(Runtime_CreateObjectLiteral) {
   Handle<ObjectBoilerplateDescription> description =
       args.at<ObjectBoilerplateDescription>(2);
   int flags = args.smi_value_at(3);
-  Handle<FeedbackVector> vector;
-  if (maybe_vector->IsFeedbackVector()) {
-    vector = Handle<FeedbackVector>::cast(maybe_vector);
-  } else {
-    DCHECK(maybe_vector->IsUndefined());
-  }
   RETURN_RESULT_OR_FAILURE(
       isolate, CreateLiteral<ObjectLiteralHelper>(
-                   isolate, vector, literals_index, description, flags));
-}
-
-RUNTIME_FUNCTION(Runtime_CreateObjectLiteralWithoutAllocationSite) {
-  HandleScope scope(isolate);
-  DCHECK_EQ(2, args.length());
-  Handle<ObjectBoilerplateDescription> description =
-      args.at<ObjectBoilerplateDescription>(0);
-  int flags = args.smi_value_at(1);
-  RETURN_RESULT_OR_FAILURE(
-      isolate, CreateLiteralWithoutAllocationSite<ObjectLiteralHelper>(
-                   isolate, description, flags));
-}
-
-RUNTIME_FUNCTION(Runtime_CreateArrayLiteralWithoutAllocationSite) {
-  HandleScope scope(isolate);
-  DCHECK_EQ(2, args.length());
-  Handle<ArrayBoilerplateDescription> description =
-      args.at<ArrayBoilerplateDescription>(0);
-  int flags = args.smi_value_at(1);
-  RETURN_RESULT_OR_FAILURE(
-      isolate, CreateLiteralWithoutAllocationSite<ArrayLiteralHelper>(
-                   isolate, description, flags));
+                   isolate, maybe_vector, literals_index, description, flags));
 }
 
 RUNTIME_FUNCTION(Runtime_CreateArrayLiteral) {
@@ -628,15 +600,9 @@ RUNTIME_FUNCTION(Runtime_CreateArrayLiteral) {
   Handle<ArrayBoilerplateDescription> elements =
       args.at<ArrayBoilerplateDescription>(2);
   int flags = args.smi_value_at(3);
-  Handle<FeedbackVector> vector;
-  if (maybe_vector->IsFeedbackVector()) {
-    vector = Handle<FeedbackVector>::cast(maybe_vector);
-  } else {
-    DCHECK(maybe_vector->IsUndefined());
-  }
   RETURN_RESULT_OR_FAILURE(
       isolate, CreateLiteral<ArrayLiteralHelper>(
-                   isolate, vector, literals_index, elements, flags));
+                   isolate, maybe_vector, literals_index, elements, flags));
 }
 
 RUNTIME_FUNCTION(Runtime_CreateRegExpLiteral) {

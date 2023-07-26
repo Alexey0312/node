@@ -92,15 +92,15 @@ TEST_F(WeakMapsTest, Weakness) {
     Handle<Smi> smi(Smi::FromInt(23), isolate);
     JSWeakCollection::Set(weakmap, symbol, smi, symbol->hash());
   }
-  CHECK_EQ(3, EphemeronHashTable::cast(weakmap->table()).NumberOfElements());
+  CHECK_EQ(3, EphemeronHashTable::cast(weakmap->table())->NumberOfElements());
 
   // Force a full GC.
-  PreciseCollectAllGarbage();
+  InvokeAtomicMajorGC();
   CHECK_EQ(0, NumberOfWeakCalls);
   // Symbol key should be deleted.
-  CHECK_EQ(2, EphemeronHashTable::cast(weakmap->table()).NumberOfElements());
+  CHECK_EQ(2, EphemeronHashTable::cast(weakmap->table())->NumberOfElements());
   CHECK_EQ(
-      1, EphemeronHashTable::cast(weakmap->table()).NumberOfDeletedElements());
+      1, EphemeronHashTable::cast(weakmap->table())->NumberOfDeletedElements());
 
   // Make the global reference to the key weak.
   std::pair<Handle<Object>*, int> handle_and_id(&key, 1234);
@@ -109,11 +109,11 @@ TEST_F(WeakMapsTest, Weakness) {
       &WeakPointerCallback, v8::WeakCallbackType::kParameter);
   CHECK(global_handles->IsWeak(key.location()));
 
-  PreciseCollectAllGarbage();
+  InvokeAtomicMajorGC();
   CHECK_EQ(1, NumberOfWeakCalls);
-  CHECK_EQ(0, EphemeronHashTable::cast(weakmap->table()).NumberOfElements());
+  CHECK_EQ(0, EphemeronHashTable::cast(weakmap->table())->NumberOfElements());
   CHECK_EQ(
-      3, EphemeronHashTable::cast(weakmap->table()).NumberOfDeletedElements());
+      3, EphemeronHashTable::cast(weakmap->table())->NumberOfDeletedElements());
 }
 
 TEST_F(WeakMapsTest, Shrinking) {
@@ -125,7 +125,7 @@ TEST_F(WeakMapsTest, Shrinking) {
   Handle<JSWeakMap> weakmap = isolate->factory()->NewJSWeakMap();
 
   // Check initial capacity.
-  CHECK_EQ(32, EphemeronHashTable::cast(weakmap->table()).Capacity());
+  CHECK_EQ(32, EphemeronHashTable::cast(weakmap->table())->Capacity());
 
   // Fill up weak map to trigger capacity change.
   {
@@ -140,25 +140,26 @@ TEST_F(WeakMapsTest, Shrinking) {
   }
 
   // Check increased capacity.
-  CHECK_EQ(128, EphemeronHashTable::cast(weakmap->table()).Capacity());
+  CHECK_EQ(128, EphemeronHashTable::cast(weakmap->table())->Capacity());
 
   // Force a full GC.
-  CHECK_EQ(32, EphemeronHashTable::cast(weakmap->table()).NumberOfElements());
+  CHECK_EQ(32, EphemeronHashTable::cast(weakmap->table())->NumberOfElements());
   CHECK_EQ(
-      0, EphemeronHashTable::cast(weakmap->table()).NumberOfDeletedElements());
-  PreciseCollectAllGarbage();
-  CHECK_EQ(0, EphemeronHashTable::cast(weakmap->table()).NumberOfElements());
+      0, EphemeronHashTable::cast(weakmap->table())->NumberOfDeletedElements());
+  InvokeAtomicMajorGC();
+  CHECK_EQ(0, EphemeronHashTable::cast(weakmap->table())->NumberOfElements());
   CHECK_EQ(
-      32, EphemeronHashTable::cast(weakmap->table()).NumberOfDeletedElements());
+      32,
+      EphemeronHashTable::cast(weakmap->table())->NumberOfDeletedElements());
 
   // Check shrunk capacity.
-  CHECK_EQ(32, EphemeronHashTable::cast(weakmap->table()).Capacity());
+  CHECK_EQ(32, EphemeronHashTable::cast(weakmap->table())->Capacity());
 }
 
 namespace {
 bool EphemeronHashTableContainsKey(EphemeronHashTable table, HeapObject key) {
-  for (InternalIndex i : table.IterateEntries()) {
-    if (table.KeyAt(i) == key) return true;
+  for (InternalIndex i : table->IterateEntries()) {
+    if (table->KeyAt(i) == key) return true;
   }
   return false;
 }
@@ -170,7 +171,7 @@ TEST_F(WeakMapsTest, WeakMapPromotionMarkCompact) {
   HandleScope scope(isolate);
   Handle<JSWeakMap> weakmap = isolate->factory()->NewJSWeakMap();
 
-  CollectAllGarbage();
+  InvokeMajorGC();
 
   CHECK(!ObjectInYoungGeneration(weakmap->table()));
 
@@ -182,14 +183,14 @@ TEST_F(WeakMapsTest, WeakMapPromotionMarkCompact) {
 
   CHECK(EphemeronHashTableContainsKey(
       EphemeronHashTable::cast(weakmap->table()), *object));
-  CollectAllGarbage();
+  InvokeMajorGC();
 
   CHECK(!ObjectInYoungGeneration(*object));
   CHECK(!ObjectInYoungGeneration(weakmap->table()));
   CHECK(EphemeronHashTableContainsKey(
       EphemeronHashTable::cast(weakmap->table()), *object));
 
-  CollectAllGarbage();
+  InvokeMajorGC();
   CHECK(!ObjectInYoungGeneration(*object));
   CHECK(!ObjectInYoungGeneration(weakmap->table()));
   CHECK(EphemeronHashTableContainsKey(
@@ -204,7 +205,7 @@ TEST_F(WeakMapsTest, WeakMapScavenge) {
   HandleScope scope(isolate);
   Handle<JSWeakMap> weakmap = isolate->factory()->NewJSWeakMap();
 
-  GcAndSweep(NEW_SPACE);
+  InvokeAtomicMinorGC();
   CHECK(ObjectInYoungGeneration(weakmap->table()));
 
   Handle<Map> map = factory->NewMap(JS_OBJECT_TYPE, JSObject::kHeaderSize);
@@ -216,15 +217,15 @@ TEST_F(WeakMapsTest, WeakMapScavenge) {
   CHECK(EphemeronHashTableContainsKey(
       EphemeronHashTable::cast(weakmap->table()), *object));
 
-  if (!v8_flags.minor_mc) {
-    GcAndSweep(NEW_SPACE);
+  if (!v8_flags.minor_ms) {
+    InvokeAtomicMinorGC();
     CHECK(ObjectInYoungGeneration(*object));
     CHECK(!ObjectInYoungGeneration(weakmap->table()));
     CHECK(EphemeronHashTableContainsKey(
         EphemeronHashTable::cast(weakmap->table()), *object));
   }
 
-  GcAndSweep(OLD_SPACE);
+  InvokeAtomicMajorGC();
   CHECK(!ObjectInYoungGeneration(*object));
   CHECK(!ObjectInYoungGeneration(weakmap->table()));
   CHECK(EphemeronHashTableContainsKey(
@@ -267,7 +268,7 @@ TEST_F(WeakMapsTest, Regress2060a) {
 
   // Force compacting garbage collection.
   CHECK(v8_flags.compact_on_every_full_gc);
-  CollectAllGarbage();
+  InvokeMajorGC();
 }
 
 // Test that weak map keys on an evacuation candidate which are reachable by
@@ -309,9 +310,9 @@ TEST_F(WeakMapsTest, Regress2060b) {
   // Force compacting garbage collection. The subsequent collections are used
   // to verify that key references were actually updated.
   CHECK(v8_flags.compact_on_every_full_gc);
-  CollectAllGarbage();
-  CollectAllGarbage();
-  CollectAllGarbage();
+  InvokeMajorGC();
+  InvokeMajorGC();
+  InvokeMajorGC();
 }
 
 TEST_F(WeakMapsTest, Regress399527) {
@@ -327,7 +328,7 @@ TEST_F(WeakMapsTest, Regress399527) {
   // The weak map is marked black here but leaving the handle scope will make
   // the object unreachable. Aborting incremental marking will clear all the
   // marking bits which makes the weak map garbage.
-  CollectAllGarbage();
+  InvokeMajorGC();
 }
 
 TEST_F(WeakMapsTest, WeakMapsWithChainedEntries) {
@@ -357,7 +358,7 @@ TEST_F(WeakMapsTest, WeakMapsWithChainedEntries) {
     JSWeakCollection::Set(weakmap1, i_o1, i_o2, hash1);
     JSWeakCollection::Set(weakmap2, i_o2, i_o1, hash2);
   }
-  CollectGarbage(OLD_SPACE);
+  InvokeMajorGC();
   CHECK(g1.IsEmpty());
   CHECK(g2.IsEmpty());
   CHECK_EQ(1, i_isolate()->heap()->gc_count() - initial_gc_count);

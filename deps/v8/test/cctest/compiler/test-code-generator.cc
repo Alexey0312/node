@@ -287,7 +287,7 @@ void PrintStateValue(std::ostream& os, Isolate* isolate, Handle<Object> value,
       FixedArray vector = FixedArray::cast(*value);
       os << "[";
       for (int lane = 0; lane < 4; lane++) {
-        os << Smi::cast(vector.get(lane)).value();
+        os << Smi::cast(vector->get(lane)).value();
         if (lane < 3) {
           os << ", ";
         }
@@ -904,9 +904,9 @@ class TestEnvironment : public HandleAndZoneScope {
       case MachineRepresentation::kSimd128:
         for (int lane = 0; lane < 4; lane++) {
           int actual_lane =
-              Smi::cast(FixedArray::cast(*actual).get(lane)).value();
+              Smi::cast(FixedArray::cast(*actual)->get(lane)).value();
           int expected_lane =
-              Smi::cast(FixedArray::cast(*expected).get(lane)).value();
+              Smi::cast(FixedArray::cast(*expected)->get(lane)).value();
           if (actual_lane != expected_lane) {
             return false;
           }
@@ -1139,12 +1139,11 @@ class CodeGeneratorTester {
 
     constexpr size_t kMaxUnoptimizedFrameHeight = 0;
     constexpr size_t kMaxPushedArgumentCount = 0;
-    constexpr wasm::AssemblerBufferCache* kNoBufferCache = nullptr;
     generator_ = new CodeGenerator(
         environment->main_zone(), &frame_, &linkage_,
         environment->instructions(), &info_, environment->main_isolate(),
         base::Optional<OsrHelper>(), kNoSourcePosition, nullptr,
-        AssemblerOptions::Default(environment->main_isolate()), kNoBufferCache,
+        AssemblerOptions::Default(environment->main_isolate()),
         Builtin::kNoBuiltinId, kMaxUnoptimizedFrameHeight,
         kMaxPushedArgumentCount);
 
@@ -1664,9 +1663,9 @@ TEST(Regress_1171759) {
           .ToHandleChecked();
 
   std::shared_ptr<wasm::NativeModule> module =
-      AllocateNativeModule(handles.main_isolate(), code->InstructionSize());
+      AllocateNativeModule(handles.main_isolate(), code->instruction_size());
   wasm::WasmCodeRefScope wasm_code_ref_scope;
-  byte* code_start = module->AddCodeForTesting(code)->instructions().begin();
+  uint8_t* code_start = module->AddCodeForTesting(code)->instructions().begin();
 
   // Generate a minimal calling function, to push stack arguments.
   RawMachineAssemblerTester<int32_t> mt;

@@ -643,16 +643,7 @@ void CodeGenerator::AssembleCodeStartRegisterCheck() {
 //       the flags in the referenced {Code} object;
 //    2. test kMarkedForDeoptimizationBit in those flags; and
 //    3. if it is not zero then it jumps to the builtin.
-void CodeGenerator::BailoutIfDeoptimized() {
-  UseScratchRegisterScope temps(masm());
-  Register scratch = temps.Acquire();
-  int offset = InstructionStream::kCodeOffset - InstructionStream::kHeaderSize;
-  __ ldr(scratch, MemOperand(kJavaScriptCallCodeStartRegister, offset));
-  __ ldr(scratch, FieldMemOperand(scratch, Code::kKindSpecificFlagsOffset));
-  __ tst(scratch, Operand(1 << Code::kMarkedForDeoptimizationBit));
-  __ Jump(BUILTIN_CODE(isolate(), CompileLazyDeoptimizedCode),
-          RelocInfo::CODE_TARGET, ne);
-}
+void CodeGenerator::BailoutIfDeoptimized() { __ BailoutIfDeoptimized(); }
 
 // Assembles an instruction after register allocation, producing machine code.
 CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
@@ -681,7 +672,11 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
     case kArchCallBuiltinPointer: {
       DCHECK(!instr->InputAt(0)->IsImmediate());
       Register builtin_index = i.InputRegister(0);
-      __ CallBuiltinByIndex(builtin_index);
+      Register target =
+          instr->HasCallDescriptorFlag(CallDescriptor::kFixedTargetRegister)
+              ? kJavaScriptCallCodeStartRegister
+              : builtin_index;
+      __ CallBuiltinByIndex(builtin_index, target);
       RecordCallPosition(instr);
       frame_access_state()->ClearSPDelta();
       break;
@@ -4136,12 +4131,13 @@ AllocatedOperand CodeGenerator::Push(InstructionOperand* source) {
 }
 
 void CodeGenerator::Pop(InstructionOperand* dest, MachineRepresentation rep) {
-  int new_slots = ElementSizeInPointers(rep);
-  frame_access_state()->IncreaseSPDelta(-new_slots);
+  int dropped_slots = ElementSizeInPointers(rep);
   ArmOperandConverter g(this, nullptr);
   if (dest->IsRegister()) {
+    frame_access_state()->IncreaseSPDelta(-dropped_slots);
     __ pop(g.ToRegister(dest));
   } else if (dest->IsStackSlot()) {
+    frame_access_state()->IncreaseSPDelta(-dropped_slots);
     UseScratchRegisterScope temps(masm());
     Register scratch = temps.Acquire();
     __ pop(scratch);
@@ -4150,12 +4146,13 @@ void CodeGenerator::Pop(InstructionOperand* dest, MachineRepresentation rep) {
     int last_frame_slot_id =
         frame_access_state_->frame()->GetTotalFrameSlotCount() - 1;
     int sp_delta = frame_access_state_->sp_delta();
-    int slot_id = last_frame_slot_id + sp_delta + new_slots;
+    int slot_id = last_frame_slot_id + sp_delta;
     AllocatedOperand stack_slot(LocationOperand::STACK_SLOT, rep, slot_id);
     AssembleMove(&stack_slot, dest);
-    __ add(sp, sp, Operand(new_slots * kSystemPointerSize));
+    frame_access_state()->IncreaseSPDelta(-dropped_slots);
+    __ add(sp, sp, Operand(dropped_slots * kSystemPointerSize));
   }
-  temp_slots_ -= new_slots;
+  temp_slots_ -= dropped_slots;
 }
 
 void CodeGenerator::PopTempStackSlots() {

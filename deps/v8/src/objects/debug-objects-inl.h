@@ -5,12 +5,13 @@
 #ifndef V8_OBJECTS_DEBUG_OBJECTS_INL_H_
 #define V8_OBJECTS_DEBUG_OBJECTS_INL_H_
 
-#include "src/objects/debug-objects.h"
-
 #include "src/heap/heap-write-barrier-inl.h"
+#include "src/objects/bytecode-array-inl.h"
 #include "src/objects/code-inl.h"
+#include "src/objects/debug-objects.h"
 #include "src/objects/objects-inl.h"
 #include "src/objects/shared-function-info.h"
+#include "src/objects/string.h"
 
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
@@ -47,7 +48,7 @@ BytecodeArray DebugInfo::OriginalBytecodeArray() {
 
 BytecodeArray DebugInfo::DebugBytecodeArray() {
   DCHECK(HasInstrumentedBytecodeArray());
-  DCHECK_EQ(shared().GetActiveBytecodeArray(),
+  DCHECK_EQ(shared()->GetActiveBytecodeArray(),
             debug_bytecode_array(kAcquireLoad));
   return BytecodeArray::cast(debug_bytecode_array(kAcquireLoad));
 }
@@ -58,7 +59,7 @@ NEVER_READ_ONLY_SPACE_IMPL(StackFrameInfo)
 Script StackFrameInfo::script() const {
   HeapObject object = shared_or_script();
   if (object.IsSharedFunctionInfo()) {
-    object = SharedFunctionInfo::cast(object).script();
+    object = SharedFunctionInfo::cast(object)->script();
   }
   return Script::cast(object);
 }

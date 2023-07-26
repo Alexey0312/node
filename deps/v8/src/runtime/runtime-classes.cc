@@ -34,7 +34,7 @@ RUNTIME_FUNCTION(Runtime_ThrowConstructorNonCallableError) {
   HandleScope scope(isolate);
   DCHECK_EQ(1, args.length());
   Handle<JSFunction> constructor = args.at<JSFunction>(0);
-  Handle<String> name(constructor->shared().Name(), isolate);
+  Handle<String> name(constructor->shared()->Name(), isolate);
 
   Handle<Context> context = handle(constructor->native_context(), isolate);
   DCHECK(context->IsNativeContext());
@@ -79,8 +79,8 @@ Object ThrowNotSuperConstructor(Isolate* isolate, Handle<Object> constructor,
                                 Handle<JSFunction> function) {
   Handle<String> super_name;
   if (constructor->IsJSFunction()) {
-    super_name =
-        handle(Handle<JSFunction>::cast(constructor)->shared().Name(), isolate);
+    super_name = handle(Handle<JSFunction>::cast(constructor)->shared()->Name(),
+                        isolate);
   } else if (constructor->IsOddball()) {
     DCHECK(constructor->IsNull(isolate));
     super_name = isolate->factory()->null_string();
@@ -91,7 +91,7 @@ Object ThrowNotSuperConstructor(Isolate* isolate, Handle<Object> constructor,
   if (super_name->length() == 0) {
     super_name = isolate->factory()->null_string();
   }
-  Handle<String> function_name(function->shared().Name(), isolate);
+  Handle<String> function_name(function->shared()->Name(), isolate);
   // anonymous class
   if (function_name->length() == 0) {
     THROW_NEW_ERROR_RETURN_FAILURE(
@@ -150,7 +150,7 @@ MaybeHandle<Object> GetMethodAndSetName(Isolate* isolate,
 
   Handle<JSFunction> method = args.at<JSFunction>(int_index);
 
-  if (!method->shared().HasSharedName()) {
+  if (!method->shared()->HasSharedName()) {
     // TODO(ishell): method does not have a shared name at this point only if
     // the key is a computed property name. However, the bytecode generator
     // explicitly generates ToName bytecodes to ensure that the computed
@@ -180,7 +180,7 @@ Object GetMethodWithSharedName(Isolate* isolate, RuntimeArguments& args,
   }
 
   Handle<JSFunction> method = args.at<JSFunction>(int_index);
-  DCHECK(method->shared().HasSharedName());
+  DCHECK(method->shared()->HasSharedName());
   return *method;
 }
 
@@ -312,7 +312,12 @@ bool AddDescriptorsByTemplate(
     }
     DisallowGarbageCollection no_gc;
     Name name = descriptors_template->GetKey(i);
-    DCHECK(name.IsUniqueName());
+    // TODO(v8:5799): consider adding a ClassBoilerplate flag
+    // "has_interesting_properties".
+    if (name->IsInteresting(isolate)) {
+      map->set_may_have_interesting_properties(true);
+    }
+    DCHECK(name->IsUniqueName());
     PropertyDetails details = descriptors_template->GetDetails(i);
     if (details.location() == PropertyLocation::kDescriptor) {
       if (details.kind() == PropertyKind::kData) {
@@ -325,13 +330,13 @@ bool AddDescriptorsByTemplate(
         DCHECK_EQ(PropertyKind::kAccessor, details.kind());
         if (value.IsAccessorPair()) {
           AccessorPair pair = AccessorPair::cast(value);
-          Object tmp = pair.getter();
+          Object tmp = pair->getter();
           if (tmp.IsSmi()) {
-            pair.set_getter(GetMethodWithSharedName(isolate, args, tmp));
+            pair->set_getter(GetMethodWithSharedName(isolate, args, tmp));
           }
-          tmp = pair.setter();
+          tmp = pair->setter();
           if (tmp.IsSmi()) {
-            pair.set_setter(GetMethodWithSharedName(isolate, args, tmp));
+            pair->set_setter(GetMethodWithSharedName(isolate, args, tmp));
           }
         }
       }
@@ -431,10 +436,10 @@ bool AddDescriptorsByTemplate(
       name = isolate->factory()->InternalizeName(name);
       ClassBoilerplate::AddToPropertiesTemplate(
           isolate, properties_dictionary, name, key_index, value_kind, value);
-      if (name->IsInterestingSymbol()) {
+      if (name->IsInteresting(isolate)) {
         // TODO(pthier): Add flags to swiss dictionaries.
         if constexpr (!V8_ENABLE_SWISS_NAME_DICTIONARY_BOOL) {
-          properties_dictionary->set_may_have_interesting_symbols(true);
+          properties_dictionary->set_may_have_interesting_properties(true);
         }
       }
     }
@@ -509,7 +514,7 @@ bool InitClassPrototype(Isolate* isolate,
   } else {
     map->set_is_dictionary_map(true);
     map->set_is_migration_target(false);
-    map->set_may_have_interesting_symbols(true);
+    map->set_may_have_interesting_properties(true);
     map->set_construction_counter(Map::kNoSlackTracking);
 
     if constexpr (V8_ENABLE_SWISS_NAME_DICTIONARY_BOOL) {
@@ -566,7 +571,7 @@ bool InitClassConstructor(Isolate* isolate,
     map->InitializeDescriptors(isolate,
                                ReadOnlyRoots(isolate).empty_descriptor_array());
     map->set_is_migration_target(false);
-    map->set_may_have_interesting_symbols(true);
+    map->set_may_have_interesting_properties(true);
     map->set_construction_counter(Map::kNoSlackTracking);
 
     if constexpr (V8_ENABLE_SWISS_NAME_DICTIONARY_BOOL) {
@@ -602,7 +607,7 @@ MaybeHandle<Object> DefineClass(Isolate* isolate,
     } else if (super_class->IsConstructor()) {
       DCHECK(!super_class->IsJSFunction() ||
              !IsResumableFunction(
-                 Handle<JSFunction>::cast(super_class)->shared().kind()));
+                 Handle<JSFunction>::cast(super_class)->shared()->kind()));
       ASSIGN_RETURN_ON_EXCEPTION(
           isolate, prototype_parent,
           Runtime::GetObjectProperty(isolate, super_class,
@@ -682,7 +687,7 @@ MaybeHandle<JSReceiver> GetSuperHolder(Isolate* isolate,
                                        Handle<JSObject> home_object,
                                        SuperMode mode, PropertyKey* key) {
   if (home_object->IsAccessCheckNeeded() &&
-      !isolate->MayAccess(handle(isolate->context(), isolate), home_object)) {
+      !isolate->MayAccess(isolate->native_context(), home_object)) {
     isolate->ReportFailedAccessCheck(home_object);
     RETURN_EXCEPTION_IF_SCHEDULED_EXCEPTION(isolate, JSReceiver);
   }

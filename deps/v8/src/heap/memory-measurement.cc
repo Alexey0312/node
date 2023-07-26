@@ -165,7 +165,9 @@ void MeasureMemoryDelegate::MeasurementComplete(
 }
 
 MemoryMeasurement::MemoryMeasurement(Isolate* isolate)
-    : isolate_(isolate), random_number_generator_() {
+    : isolate_(isolate),
+      task_runner_(isolate->heap()->GetForegroundTaskRunner()),
+      random_number_generator_() {
   if (v8_flags.random_seed) {
     random_number_generator_.SetSeed(v8_flags.random_seed);
   }
@@ -233,9 +235,7 @@ void MemoryMeasurement::FinishProcessing(const NativeContextStats& stats) {
 void MemoryMeasurement::ScheduleReportingTask() {
   if (reporting_task_pending_) return;
   reporting_task_pending_ = true;
-  auto taskrunner = V8::GetCurrentPlatform()->GetForegroundTaskRunner(
-      reinterpret_cast<v8::Isolate*>(isolate_));
-  taskrunner->PostTask(MakeCancelableTask(isolate_, [this] {
+  task_runner_->PostTask(MakeCancelableTask(isolate_, [this] {
     reporting_task_pending_ = false;
     ReportResults();
   }));
@@ -273,15 +273,13 @@ void MemoryMeasurement::ScheduleGCTask(v8::MeasureMemoryExecution execution) {
   if (execution == v8::MeasureMemoryExecution::kLazy) return;
   if (IsGCTaskPending(execution)) return;
   SetGCTaskPending(execution);
-  auto taskrunner = V8::GetCurrentPlatform()->GetForegroundTaskRunner(
-      reinterpret_cast<v8::Isolate*>(isolate_));
   auto task = MakeCancelableTask(isolate_, [this, execution] {
     SetGCTaskDone(execution);
     if (received_.empty()) return;
     Heap* heap = isolate_->heap();
     if (v8_flags.incremental_marking) {
       if (heap->incremental_marking()->IsStopped()) {
-        heap->StartIncrementalMarking(Heap::kNoGCFlags,
+        heap->StartIncrementalMarking(GCFlag::kNoFlags,
                                       GarbageCollectionReason::kMeasureMemory);
       } else {
         if (execution == v8::MeasureMemoryExecution::kEager) {
@@ -295,9 +293,9 @@ void MemoryMeasurement::ScheduleGCTask(v8::MeasureMemoryExecution execution) {
     }
   });
   if (execution == v8::MeasureMemoryExecution::kEager) {
-    taskrunner->PostTask(std::move(task));
+    task_runner_->PostTask(std::move(task));
   } else {
-    taskrunner->PostDelayedTask(std::move(task), NextGCTaskDelayInSeconds());
+    task_runner_->PostDelayedTask(std::move(task), NextGCTaskDelayInSeconds());
   }
 }
 
@@ -339,7 +337,7 @@ std::unique_ptr<v8::MeasureMemoryDelegate> MemoryMeasurement::DefaultDelegate(
 bool NativeContextInferrer::InferForContext(Isolate* isolate, Context context,
                                             Address* native_context) {
   PtrComprCageBase cage_base(isolate);
-  Map context_map = context.map(cage_base, kAcquireLoad);
+  Map context_map = context->map(cage_base, kAcquireLoad);
   Object maybe_native_context =
       TaggedField<Object, Map::kConstructorOrBackPointerOrNativeContextOffset>::
           Acquire_Load(cage_base, context_map);
@@ -371,9 +369,9 @@ bool NativeContextInferrer::InferForJSFunction(Isolate* isolate,
 bool NativeContextInferrer::InferForJSObject(Isolate* isolate, Map map,
                                              JSObject object,
                                              Address* native_context) {
-  if (map.instance_type() == JS_GLOBAL_OBJECT_TYPE) {
+  if (map->instance_type() == JS_GLOBAL_OBJECT_TYPE) {
     Object maybe_context =
-        JSGlobalObject::cast(object).native_context_unchecked(isolate);
+        JSGlobalObject::cast(object)->native_context_unchecked(isolate);
     if (maybe_context.IsNativeContext()) {
       *native_context = maybe_context.ptr();
       return true;
@@ -381,7 +379,7 @@ bool NativeContextInferrer::InferForJSObject(Isolate* isolate, Map map,
   }
   // The maximum number of steps to perform when looking for the context.
   const int kMaxSteps = 3;
-  Object maybe_constructor = map.TryGetConstructor(isolate, kMaxSteps);
+  Object maybe_constructor = map->TryGetConstructor(isolate, kMaxSteps);
   if (maybe_constructor.IsJSFunction()) {
     return InferForJSFunction(isolate, JSFunction::cast(maybe_constructor),
                               native_context);
@@ -399,13 +397,13 @@ void NativeContextStats::Merge(const NativeContextStats& other) {
 
 void NativeContextStats::IncrementExternalSize(Address context, Map map,
                                                HeapObject object) {
-  InstanceType instance_type = map.instance_type();
+  InstanceType instance_type = map->instance_type();
   size_t external_size = 0;
   if (instance_type == JS_ARRAY_BUFFER_TYPE) {
-    external_size = JSArrayBuffer::cast(object).GetByteLength();
+    external_size = JSArrayBuffer::cast(object)->GetByteLength();
   } else {
     DCHECK(InstanceTypeChecker::IsExternalString(instance_type));
-    external_size = ExternalString::cast(object).ExternalPayloadSize();
+    external_size = ExternalString::cast(object)->ExternalPayloadSize();
   }
   size_by_context_[context] += external_size;
 }

@@ -73,11 +73,11 @@ bool AreStdlibMembersValid(Isolate* isolate, Handle<JSReceiver> stdlib,
     Handle<Object> value = StdlibMathMember(isolate, stdlib, name);        \
     if (!value->IsJSFunction()) return false;                              \
     SharedFunctionInfo shared = Handle<JSFunction>::cast(value)->shared(); \
-    if (!shared.HasBuiltinId() ||                                          \
-        shared.builtin_id() != Builtin::kMath##FName) {                    \
+    if (!shared->HasBuiltinId() ||                                         \
+        shared->builtin_id() != Builtin::kMath##FName) {                   \
       return false;                                                        \
     }                                                                      \
-    DCHECK_EQ(shared.GetCode(isolate),                                     \
+    DCHECK_EQ(shared->GetCode(isolate),                                    \
               isolate->builtins()->code(Builtin::kMath##FName));           \
   }
   STDLIB_MATH_FUNCTION_LIST(STDLIB_MATH_FUNC)
@@ -334,7 +334,7 @@ MaybeHandle<Object> AsmJs::InstantiateAsmWasm(Isolate* isolate,
   int position = shared->StartPosition();
 
   // Check that the module is not instantiated as a generator or async function.
-  if (IsResumableFunction(shared->scope_info().function_kind())) {
+  if (IsResumableFunction(shared->scope_info()->function_kind())) {
     ReportInstantiationFailure(script, position,
                                "Cannot be instantiated as resumable function");
     return MaybeHandle<Object>();
@@ -369,18 +369,30 @@ MaybeHandle<Object> AsmJs::InstantiateAsmWasm(Isolate* isolate,
                                  "Invalid heap type: SharedArrayBuffer");
       return MaybeHandle<Object>();
     }
-    // Mark the buffer as being used as an asm.js memory. This implies two
-    // things: 1) if the buffer is from a Wasm memory, that memory can no longer
-    // be grown, since that would detach this buffer, and 2) the buffer cannot
-    // be postMessage()'d, as that also detaches the buffer.
-    memory->set_is_asmjs_memory(true);
-    memory->set_is_detachable(false);
+    // We don't allow resizable ArrayBuffers because resizable ArrayBuffers may
+    // shrink, and then asm.js does out of bounds memory accesses.
+    if (memory->is_resizable_by_js()) {
+      ReportInstantiationFailure(script, position,
+                                 "Invalid heap type: resizable ArrayBuffer");
+      return MaybeHandle<Object>();
+    }
+    // We don't allow WebAssembly.Memory, because WebAssembly.Memory.grow()
+    // detaches the ArrayBuffer, and that would invalidate the asm.js module.
+    if (memory->GetBackingStore() &&
+        memory->GetBackingStore()->is_wasm_memory()) {
+      ReportInstantiationFailure(script, position,
+                                 "Invalid heap type: WebAssembly.Memory");
+      return MaybeHandle<Object>();
+    }
     size_t size = memory->byte_length();
     // Check the asm.js heap size against the valid limits.
     if (!IsValidAsmjsMemorySize(size)) {
       ReportInstantiationFailure(script, position, "Invalid heap size");
       return MaybeHandle<Object>();
     }
+    // Mark the buffer as undetachable. This implies that the buffer cannot be
+    // postMessage()'d, as that detaches the buffer.
+    memory->set_is_detachable(false);
   } else {
     memory = Handle<JSArrayBuffer>::null();
   }

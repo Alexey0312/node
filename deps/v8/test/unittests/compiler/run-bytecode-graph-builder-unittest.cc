@@ -136,19 +136,14 @@ class BytecodeGraphTester {
     Handle<JSFunction> function =
         Handle<JSFunction>::cast(v8::Utils::OpenHandle(*api_function));
     IsCompiledScope is_compiled_scope(
-        function->shared().is_compiled_scope(isolate_));
+        function->shared()->is_compiled_scope(isolate_));
     JSFunction::EnsureFeedbackVector(isolate_, function, &is_compiled_scope);
-    CHECK(function->shared().HasBytecodeArray());
+    CHECK(function->shared()->HasBytecodeArray());
 
     Zone zone(isolate_->allocator(), ZONE_NAME);
     Handle<SharedFunctionInfo> shared(function->shared(), isolate_);
     OptimizedCompilationInfo compilation_info(&zone, isolate_, shared, function,
                                               CodeKind::TURBOFAN);
-
-    // Compiler relies on canonicalized handles, let's create
-    // a canonicalized scope and migrate existing handles there.
-    CanonicalHandleScope canonical(isolate_);
-    compilation_info.ReopenHandlesInNewHandleScope(isolate_);
 
     Handle<Code> code =
         Pipeline::GenerateCodeForTesting(&compilation_info, isolate_)

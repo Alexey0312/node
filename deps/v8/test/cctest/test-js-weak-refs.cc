@@ -125,8 +125,8 @@ Object PopClearedCellHoldings(
   if (finalization_registry->cleared_cells().IsWeakCell()) {
     WeakCell cleared_cells_head =
         WeakCell::cast(finalization_registry->cleared_cells());
-    DCHECK_EQ(cleared_cells_head.prev(), *weak_cell);
-    cleared_cells_head.set_prev(ReadOnlyRoots(isolate).undefined_value());
+    DCHECK_EQ(cleared_cells_head->prev(), *weak_cell);
+    cleared_cells_head->set_prev(ReadOnlyRoots(isolate).undefined_value());
   } else {
     DCHECK(finalization_registry->cleared_cells().IsUndefined(isolate));
   }
@@ -153,15 +153,15 @@ void VerifyWeakCellChain(Isolate* isolate, Object list_head, int n_args, ...) {
   } else {
     WeakCell current = WeakCell::cast(Object(va_arg(args, Address)));
     CHECK_EQ(current, list_head);
-    CHECK(current.prev().IsUndefined(isolate));
+    CHECK(current->prev().IsUndefined(isolate));
 
     for (int i = 1; i < n_args; i++) {
       WeakCell next = WeakCell::cast(Object(va_arg(args, Address)));
-      CHECK_EQ(current.next(), next);
-      CHECK_EQ(next.prev(), current);
+      CHECK_EQ(current->next(), next);
+      CHECK_EQ(next->prev(), current);
       current = next;
     }
-    CHECK(current.next().IsUndefined(isolate));
+    CHECK(current->next().IsUndefined(isolate));
   }
   va_end(args);
 }
@@ -179,7 +179,7 @@ void VerifyWeakCellKeyChain(Isolate* isolate, SimpleNumberDictionary key_map,
   InternalIndex entry = InternalIndex::NotFound();
   if (!hash.IsUndefined(isolate)) {
     uint32_t key = Smi::ToInt(hash);
-    entry = key_map.FindEntry(isolate, key);
+    entry = key_map->FindEntry(isolate, key);
   }
   if (n_args == 0) {
     // Verify empty list
@@ -187,17 +187,17 @@ void VerifyWeakCellKeyChain(Isolate* isolate, SimpleNumberDictionary key_map,
   } else {
     CHECK(entry.is_found());
     WeakCell current = WeakCell::cast(Object(va_arg(args, Address)));
-    Object list_head = key_map.ValueAt(entry);
+    Object list_head = key_map->ValueAt(entry);
     CHECK_EQ(current, list_head);
-    CHECK(current.key_list_prev().IsUndefined(isolate));
+    CHECK(current->key_list_prev().IsUndefined(isolate));
 
     for (int i = 1; i < n_args; i++) {
       WeakCell next = WeakCell::cast(Object(va_arg(args, Address)));
-      CHECK_EQ(current.key_list_next(), next);
-      CHECK_EQ(next.key_list_prev(), current);
+      CHECK_EQ(current->key_list_next(), next);
+      CHECK_EQ(next->key_list_prev(), current);
       current = next;
     }
-    CHECK(current.key_list_next().IsUndefined(isolate));
+    CHECK(current->key_list_next().IsUndefined(isolate));
   }
   va_end(args);
 }
@@ -699,7 +699,7 @@ TEST(TestJSWeakRef) {
     // This doesn't add the target into the KeepDuringJob set.
     Handle<JSWeakRef> inner_weak_ref = ConstructJSWeakRef(js_object, isolate);
 
-    CcTest::CollectAllGarbage();
+    heap::InvokeMajorGC(CcTest::heap());
     CHECK(!inner_weak_ref->target().IsUndefined(isolate));
 
     weak_ref = inner_scope.CloseAndEscape(inner_weak_ref);
@@ -707,7 +707,7 @@ TEST(TestJSWeakRef) {
 
   CHECK(!weak_ref->target().IsUndefined(isolate));
 
-  CcTest::CollectAllGarbage();
+  heap::InvokeMajorGC(CcTest::heap());
 
   CHECK(weak_ref->target().IsUndefined(isolate));
 }
@@ -734,7 +734,7 @@ TEST(TestJSWeakRefIncrementalMarking) {
     Handle<JSWeakRef> inner_weak_ref = ConstructJSWeakRef(js_object, isolate);
 
     heap::SimulateIncrementalMarking(heap, true);
-    CcTest::CollectAllGarbage();
+    heap::InvokeMajorGC(heap);
     CHECK(!inner_weak_ref->target().IsUndefined(isolate));
 
     weak_ref = inner_scope.CloseAndEscape(inner_weak_ref);
@@ -743,7 +743,7 @@ TEST(TestJSWeakRefIncrementalMarking) {
   CHECK(!weak_ref->target().IsUndefined(isolate));
 
   heap::SimulateIncrementalMarking(heap, true);
-  CcTest::CollectAllGarbage();
+  heap::InvokeMajorGC(heap);
 
   CHECK(weak_ref->target().IsUndefined(isolate));
 }
@@ -759,32 +759,32 @@ TEST(TestJSWeakRefKeepDuringJob) {
   HandleScope outer_scope(isolate);
   Handle<JSWeakRef> weak_ref = MakeWeakRefAndKeepDuringJob(isolate);
   CHECK(!weak_ref->target().IsUndefined(isolate));
-  CcTest::CollectAllGarbage();
+  heap::InvokeMajorGC(CcTest::heap());
   CHECK(!weak_ref->target().IsUndefined(isolate));
 
   // Clears the KeepDuringJob set.
   context->GetIsolate()->ClearKeptObjects();
-  CcTest::CollectAllGarbage();
+  heap::InvokeMajorGC(CcTest::heap());
   CHECK(weak_ref->target().IsUndefined(isolate));
 
   weak_ref = MakeWeakRefAndKeepDuringJob(isolate);
   CHECK(!weak_ref->target().IsUndefined(isolate));
-  CcTest::CollectAllGarbage();
+  heap::InvokeMajorGC(CcTest::heap());
   CHECK(!weak_ref->target().IsUndefined(isolate));
 
   // ClearKeptObjects should be called by PerformMicrotasksCheckpoint.
   CcTest::isolate()->PerformMicrotaskCheckpoint();
-  CcTest::CollectAllGarbage();
+  heap::InvokeMajorGC(CcTest::heap());
   CHECK(weak_ref->target().IsUndefined(isolate));
 
   weak_ref = MakeWeakRefAndKeepDuringJob(isolate);
   CHECK(!weak_ref->target().IsUndefined(isolate));
-  CcTest::CollectAllGarbage();
+  heap::InvokeMajorGC(CcTest::heap());
   CHECK(!weak_ref->target().IsUndefined(isolate));
 
   // ClearKeptObjects should be called by MicrotasksScope::PerformCheckpoint.
   v8::MicrotasksScope::PerformCheckpoint(CcTest::isolate());
-  CcTest::CollectAllGarbage();
+  heap::InvokeMajorGC(CcTest::heap());
   CHECK(weak_ref->target().IsUndefined(isolate));
 }
 
@@ -805,14 +805,14 @@ TEST(TestJSWeakRefKeepDuringJobIncrementalMarking) {
   CHECK(!weak_ref->target().IsUndefined(isolate));
 
   heap::SimulateIncrementalMarking(heap, true);
-  CcTest::CollectAllGarbage();
+  heap::InvokeMajorGC(heap);
 
   CHECK(!weak_ref->target().IsUndefined(isolate));
 
   // Clears the KeepDuringJob set.
   context->GetIsolate()->ClearKeptObjects();
   heap::SimulateIncrementalMarking(heap, true);
-  CcTest::CollectAllGarbage();
+  heap::InvokeMajorGC(heap);
 
   CHECK(weak_ref->target().IsUndefined(isolate));
 }
@@ -922,11 +922,11 @@ TEST(JSWeakRefScavengedInWorklist) {
   }
 
   // Now collect both weak_ref and its target. The worklist should be empty.
-  CcTest::CollectGarbage(NEW_SPACE);
+  heap::InvokeMinorGC(heap);
   CHECK(heap->mark_compact_collector()->weak_objects()->js_weak_refs.IsEmpty());
 
   // The mark-compactor shouldn't see zapped WeakRefs in the worklist.
-  CcTest::CollectAllGarbage();
+  heap::InvokeMajorGC(heap);
 }
 
 TEST(JSWeakRefTenuredInWorklist) {
@@ -959,7 +959,7 @@ TEST(JSWeakRefTenuredInWorklist) {
   // incremental marking.
   v8::Global<Value> global_weak_ref(
       CcTest::isolate(), Utils::ToLocal(Handle<Object>::cast(weak_ref)));
-  JSWeakRef old_weak_ref_location = *weak_ref;
+  Address old_weak_ref_location = weak_ref->address();
 
   // Do marking. This puts the WeakRef above into the js_weak_refs worklist
   // since its target isn't marked.
@@ -971,14 +971,14 @@ TEST(JSWeakRefTenuredInWorklist) {
 
   // Now collect weak_ref's target. We still have a Handle to weak_ref, so it is
   // moved and remains on the worklist.
-  CcTest::CollectGarbage(NEW_SPACE);
-  JSWeakRef new_weak_ref_location = *weak_ref;
+  heap::InvokeMinorGC(heap);
+  Address new_weak_ref_location = weak_ref->address();
   CHECK_NE(old_weak_ref_location, new_weak_ref_location);
   CHECK(
       !heap->mark_compact_collector()->weak_objects()->js_weak_refs.IsEmpty());
 
   // The mark-compactor should see the moved WeakRef in the worklist.
-  CcTest::CollectAllGarbage();
+  heap::InvokeMajorGC(heap);
   CHECK(heap->mark_compact_collector()->weak_objects()->js_weak_refs.IsEmpty());
   CHECK(weak_ref->target().IsUndefined(isolate));
 }
@@ -1013,8 +1013,8 @@ TEST(UnregisterTokenHeapVerifier) {
 
   // GC so the WeakCell corresponding to o is moved from the active_cells to
   // cleared_cells.
-  CcTest::CollectAllGarbage();
-  CcTest::CollectAllGarbage();
+  heap::InvokeMajorGC(heap);
+  heap::InvokeMajorGC(heap);
 
   {
     // Override the unregister token to make the original object collectible.
@@ -1071,8 +1071,8 @@ TEST(UnregisteredAndUnclearedCellHeapVerifier) {
   }
 
   // Trigger GC.
-  CcTest::CollectAllGarbage();
-  CcTest::CollectAllGarbage();
+  heap::InvokeMajorGC(heap);
+  heap::InvokeMajorGC(heap);
 
   // Pump message loop to run the finalizer task, then the incremental marking
   // task. The verifier will verify that live WeakCells don't point to dead

@@ -181,8 +181,8 @@ InternalIndex HashTable<Derived, Shape>::FindEntry(PtrComprCageBase cage_base,
   DisallowGarbageCollection no_gc;
   uint32_t capacity = Capacity();
   uint32_t count = 1;
-  Object undefined = roots.undefined_value();
-  Object the_hole = roots.the_hole_value();
+  Tagged<Object> undefined = roots.undefined_value();
+  Tagged<Object> the_hole = roots.the_hole_value();
   DCHECK_EQ(Shape::Hash(roots, key), static_cast<uint32_t>(hash));
   // EnsureCapacity will guarantee the hash table is never full.
   for (InternalIndex entry = FirstProbe(hash, capacity);;
@@ -311,7 +311,7 @@ uint32_t RegisteredSymbolTableShape::Hash(ReadOnlyRoots roots,
 
 uint32_t RegisteredSymbolTableShape::HashForObject(ReadOnlyRoots roots,
                                                    Object object) {
-  return String::cast(object).EnsureHash();
+  return String::cast(object)->EnsureHash();
 }
 
 bool NameToIndexShape::IsMatch(Handle<Name> key, Object other) {
@@ -319,7 +319,7 @@ bool NameToIndexShape::IsMatch(Handle<Name> key, Object other) {
 }
 
 uint32_t NameToIndexShape::HashForObject(ReadOnlyRoots roots, Object other) {
-  return Name::cast(other).hash();
+  return Name::cast(other)->hash();
 }
 
 uint32_t NameToIndexShape::Hash(ReadOnlyRoots roots, Handle<Name> key) {
@@ -345,12 +345,12 @@ Handle<NameToIndexHashTable> NameToIndexHashTable::Add(
   // Check whether the dictionary should be extended.
   table = EnsureCapacity(isolate, table);
   DisallowGarbageCollection no_gc;
-  auto raw_table = *table;
+  Tagged<NameToIndexHashTable> raw_table = *table;
   // Compute the key object.
-  InternalIndex entry = raw_table.FindInsertionEntry(isolate, key->hash());
-  raw_table.set(EntryToIndex(entry), *key);
-  raw_table.set(EntryToValueIndex(entry), Smi::FromInt(index));
-  raw_table.ElementAdded();
+  InternalIndex entry = raw_table->FindInsertionEntry(isolate, key->hash());
+  raw_table->set(EntryToIndex(entry), *key);
+  raw_table->set(EntryToValueIndex(entry), Smi::FromInt(index));
+  raw_table->ElementAdded();
   return table;
 }
 
