@@ -1,4 +1,4 @@
-const crypto = require('crypto')
+const crypto = require('node:crypto')
 const normalizeData = require('normalize-package-data')
 const parseLicense = require('spdx-expression-parse')
 const npa = require('npm-package-arg')
@@ -86,8 +86,15 @@ const toCyclonedxItem = (node, { packageType }) => {
 
   let parsedLicense
   try {
-    parsedLicense = parseLicense(node.package?.license)
-  } catch (err) {
+    let license = node.package?.license
+    if (license) {
+      if (typeof license === 'object') {
+        license = license.type
+      }
+    }
+
+    parsedLicense = parseLicense(license)
+  } catch {
     parsedLicense = null
   }
 
@@ -152,7 +159,7 @@ const toCyclonedxItem = (node, { packageType }) => {
   // If license is a single SPDX license, use the license field
   if (parsedLicense?.license) {
     component.licenses = [{ license: { id: parsedLicense.license } }]
-  // If license is a conjunction, use the expression field
+    // If license is a conjunction, use the expression field
   } else if (parsedLicense?.conjunction) {
     component.licenses = [{ expression: node.package.license }]
   }
@@ -185,7 +192,7 @@ const isGitNode = (node) => {
   try {
     const { type } = npa(node.resolved)
     return type === 'git' || type === 'hosted'
-  } catch (err) {
+  } catch {
     /* istanbul ignore next */
     return false
   }
