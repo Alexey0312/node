@@ -1,8 +1,9 @@
 const t = require('tap')
-const { resolve } = require('path')
+const { resolve } = require('node:path')
 const realRunScript = require('@npmcli/run-script')
 const mockNpm = require('../../fixtures/mock-npm')
 const { cleanCwd } = require('../../fixtures/clean-snapshot')
+const path = require('node:path')
 
 const mockRs = async (t, { windows = false, runScript, ...opts } = {}) => {
   let RUN_SCRIPTS = []
@@ -30,7 +31,7 @@ const mockRs = async (t, { windows = false, runScript, ...opts } = {}) => {
     ...mock,
     RUN_SCRIPTS: () => RUN_SCRIPTS,
     runScript: mock['run-script'],
-    cleanLogs: () => mock.logs.error.flat().map(v => v.toString()).map(cleanCwd),
+    cleanLogs: () => mock.logs.error.map(cleanCwd).join('\n'),
   }
 }
 
@@ -347,7 +348,7 @@ t.test('skip pre/post hooks when using ignoreScripts', async t => {
           env: 'env',
         },
       },
-      banner: true,
+      nodeGyp: npm.config.get('node-gyp'),
       event: 'env',
     },
   ])
@@ -388,7 +389,6 @@ t.test('run silent', async t => {
         },
       },
       event: 'env',
-      banner: false,
     },
     {
       event: 'postenv',
@@ -420,50 +420,31 @@ t.test('list scripts', async t => {
 
     await mock.runScript.exec([])
 
-    return mock.outputs
+    return mock.joinedOutput()
   }
 
   t.test('no args', async t => {
     const output = await mockList(t)
-    t.strictSame(
-      output,
-      [
-        ['Lifecycle scripts included in x@1.2.3:'],
-        ['  test\n    exit 2'],
-        ['  start\n    node server.js'],
-        ['  stop\n    node kill-server.js'],
-        ['\navailable via `npm run-script`:'],
-        ['  preenv\n    echo before the env'],
-        ['  postenv\n    echo after the env'],
-        [''],
-      ],
-      'basic report'
-    )
+    t.matchSnapshot(output, 'basic report')
   })
 
   t.test('silent', async t => {
-    const outputs = await mockList(t, { silent: true })
-    t.strictSame(outputs, [])
+    const output = await mockList(t, { silent: true })
+    t.strictSame(output, '')
   })
   t.test('warn json', async t => {
-    const outputs = await mockList(t, { json: true })
-    t.strictSame(outputs, [[JSON.stringify(scripts, 0, 2)]], 'json report')
+    const output = await mockList(t, { json: true })
+    t.matchSnapshot(output, 'json report')
   })
 
   t.test('parseable', async t => {
-    const outputs = await mockList(t, { parseable: true })
-    t.strictSame(outputs, [
-      ['test:exit 2'],
-      ['start:node server.js'],
-      ['stop:node kill-server.js'],
-      ['preenv:echo before the env'],
-      ['postenv:echo after the env'],
-    ])
+    const output = await mockList(t, { parseable: true })
+    t.matchSnapshot(output)
   })
 })
 
 t.test('list scripts when no scripts', async t => {
-  const { runScript, outputs } = await mockRs(t, {
+  const { runScript, joinedOutput } = await mockRs(t, {
     prefixDir: {
       'package.json': JSON.stringify({
         name: 'x',
@@ -473,11 +454,11 @@ t.test('list scripts when no scripts', async t => {
   })
 
   await runScript.exec([])
-  t.strictSame(outputs, [], 'nothing to report')
+  t.strictSame(joinedOutput(), '', 'nothing to report')
 })
 
 t.test('list scripts, only commands', async t => {
-  const { runScript, outputs } = await mockRs(t, {
+  const { runScript, joinedOutput } = await mockRs(t, {
     prefixDir: {
       'package.json': JSON.stringify({
         name: 'x',
@@ -488,15 +469,11 @@ t.test('list scripts, only commands', async t => {
   })
 
   await runScript.exec([])
-  t.strictSame(outputs, [
-    ['Lifecycle scripts included in x@1.2.3:'],
-    ['  preversion\n    echo doing the version dance'],
-    [''],
-  ])
+  t.matchSnapshot(joinedOutput())
 })
 
 t.test('list scripts, only non-commands', async t => {
-  const { runScript, outputs } = await mockRs(t, {
+  const { runScript, joinedOutput } = await mockRs(t, {
     prefixDir: {
       'package.json': JSON.stringify({
         name: 'x',
@@ -507,10 +484,25 @@ t.test('list scripts, only non-commands', async t => {
   })
 
   await runScript.exec([])
-  t.strictSame(outputs, [
-    ['Scripts available in x@1.2.3 via `npm run-script`:'],
-    ['  glorp\n    echo doing the glerp glop'],
-    [''],
+  t.matchSnapshot(joinedOutput())
+})
+
+t.test('node-gyp config', async t => {
+  const { runScript, RUN_SCRIPTS, npm } = await mockRs(t, {
+    prefixDir: {
+      'package.json': JSON.stringify({
+        name: 'x',
+        version: '1.2.3',
+      }),
+    },
+    config: { 'node-gyp': '/test/node-gyp.js' },
+  })
+
+  await runScript.exec(['env'])
+  t.match(RUN_SCRIPTS(), [
+    {
+      nodeGyp: npm.config.get('node-gyp'),
+    },
   ])
 })
 
@@ -520,6 +512,7 @@ t.test('workspaces', async t => {
     prefixDir,
     workspaces = true,
     exec = [],
+    chdir = ({ prefix }) => prefix,
     ...config
   } = {}) => {
     const mock = await mockRs(t, {
@@ -583,6 +576,7 @@ t.test('workspaces', async t => {
         ...Array.isArray(workspaces) ? { workspace: workspaces } : { workspaces },
         ...config,
       },
+      chdir,
       runScript,
     })
     if (exec) {
@@ -591,159 +585,60 @@ t.test('workspaces', async t => {
     return mock
   }
 
+  t.test('completion', async t => {
+    t.test('in root dir', async t => {
+      const { runScript } = await mockWorkspaces(t)
+      const res = await runScript.completion({ conf: { argv: { remain: ['npm', 'run'] } } })
+      t.strictSame(res, [])
+    })
+
+    t.test('in workspace dir', async t => {
+      const { runScript } = await mockWorkspaces(t, {
+        chdir: ({ prefix }) => path.join(prefix, 'packages/c'),
+      })
+      const res = await runScript.completion({ conf: { argv: { remain: ['npm', 'run'] } } })
+      t.strictSame(res, ['test', 'posttest', 'lorem'])
+    })
+  })
+
   t.test('list all scripts', async t => {
-    const { outputs } = await mockWorkspaces(t)
-    t.strictSame(outputs, [
-      ['Scripts available in a@1.0.0 via `npm run-script`:'],
-      ['  glorp\n    echo a doing the glerp glop'],
-      [''],
-      ['Scripts available in b@2.0.0 via `npm run-script`:'],
-      ['  glorp\n    echo b doing the glerp glop'],
-      [''],
-      ['Lifecycle scripts included in c@1.0.0:'],
-      ['  test\n    exit 0'],
-      ['  posttest\n    echo posttest'],
-      ['\navailable via `npm run-script`:'],
-      ['  lorem\n    echo c lorem'],
-      [''],
-      ['Lifecycle scripts included in d@1.0.0:'],
-      ['  test\n    exit 0'],
-      ['  posttest\n    echo posttest'],
-      [''],
-      ['Lifecycle scripts included in e:'],
-      ['  test\n    exit 0'],
-      ['  start\n    echo start something'],
-      [''],
-    ])
+    const { joinedOutput } = await mockWorkspaces(t)
+    t.matchSnapshot(joinedOutput())
   })
 
   t.test('list regular scripts, filtered by name', async t => {
-    const { outputs } = await mockWorkspaces(t, { workspaces: ['a', 'b'] })
-    t.strictSame(outputs, [
-      ['Scripts available in a@1.0.0 via `npm run-script`:'],
-      ['  glorp\n    echo a doing the glerp glop'],
-      [''],
-      ['Scripts available in b@2.0.0 via `npm run-script`:'],
-      ['  glorp\n    echo b doing the glerp glop'],
-      [''],
-    ])
+    const { joinedOutput } = await mockWorkspaces(t, { workspaces: ['a', 'b'] })
+    t.matchSnapshot(joinedOutput())
   })
 
   t.test('list regular scripts, filtered by path', async t => {
-    const { outputs } = await mockWorkspaces(t, { workspaces: ['./packages/a'] })
-    t.strictSame(outputs, [
-      ['Scripts available in a@1.0.0 via `npm run-script`:'],
-      ['  glorp\n    echo a doing the glerp glop'],
-      [''],
-    ])
+    const { joinedOutput } = await mockWorkspaces(t, { workspaces: ['./packages/a'] })
+    t.matchSnapshot(joinedOutput())
   })
 
   t.test('list regular scripts, filtered by parent folder', async t => {
-    const { outputs } = await mockWorkspaces(t, { workspaces: ['./packages'] })
-    t.strictSame(outputs, [
-      ['Scripts available in a@1.0.0 via `npm run-script`:'],
-      ['  glorp\n    echo a doing the glerp glop'],
-      [''],
-      ['Scripts available in b@2.0.0 via `npm run-script`:'],
-      ['  glorp\n    echo b doing the glerp glop'],
-      [''],
-      ['Lifecycle scripts included in c@1.0.0:'],
-      ['  test\n    exit 0'],
-      ['  posttest\n    echo posttest'],
-      ['\navailable via `npm run-script`:'],
-      ['  lorem\n    echo c lorem'],
-      [''],
-      ['Lifecycle scripts included in d@1.0.0:'],
-      ['  test\n    exit 0'],
-      ['  posttest\n    echo posttest'],
-      [''],
-      ['Lifecycle scripts included in e:'],
-      ['  test\n    exit 0'],
-      ['  start\n    echo start something'],
-      [''],
-    ])
+    const { joinedOutput } = await mockWorkspaces(t, { workspaces: ['./packages'] })
+    t.matchSnapshot(joinedOutput())
   })
 
   t.test('list all scripts with colors', async t => {
-    const { outputs } = await mockWorkspaces(t, { color: 'always' })
-    t.strictSame(outputs, [
-      [
-        /* eslint-disable-next-line max-len */
-        '\u001b[1mScripts\u001b[22m available in \x1B[32ma@1.0.0\x1B[39m via `\x1B[34mnpm run-script\x1B[39m`:',
-      ],
-      ['  glorp\n    \x1B[2mecho a doing the glerp glop\x1B[22m'],
-      [''],
-      [
-        /* eslint-disable-next-line max-len */
-        '\u001b[1mScripts\u001b[22m available in \x1B[32mb@2.0.0\x1B[39m via `\x1B[34mnpm run-script\x1B[39m`:',
-      ],
-      ['  glorp\n    \x1B[2mecho b doing the glerp glop\x1B[22m'],
-      [''],
-      ['\x1B[0m\x1B[1mLifecycle scripts\x1B[22m\x1B[0m included in \x1B[32mc@1.0.0\x1B[39m:'],
-      ['  test\n    \x1B[2mexit 0\x1B[22m'],
-      ['  posttest\n    \x1B[2mecho posttest\x1B[22m'],
-      ['\navailable via `\x1B[34mnpm run-script\x1B[39m`:'],
-      ['  lorem\n    \x1B[2mecho c lorem\x1B[22m'],
-      [''],
-      ['\x1B[0m\x1B[1mLifecycle scripts\x1B[22m\x1B[0m included in \x1B[32md@1.0.0\x1B[39m:'],
-      ['  test\n    \x1B[2mexit 0\x1B[22m'],
-      ['  posttest\n    \x1B[2mecho posttest\x1B[22m'],
-      [''],
-      ['\x1B[0m\x1B[1mLifecycle scripts\x1B[22m\x1B[0m included in \x1B[32me\x1B[39m:'],
-      ['  test\n    \x1B[2mexit 0\x1B[22m'],
-      ['  start\n    \x1B[2mecho start something\x1B[22m'],
-      [''],
-    ])
+    const { joinedOutput } = await mockWorkspaces(t, { color: 'always' })
+    t.matchSnapshot(joinedOutput())
   })
 
   t.test('list all scripts --json', async t => {
-    const { outputs } = await mockWorkspaces(t, { json: true })
-    t.strictSame(outputs, [
-      [
-        '{\n' +
-          '  "a": {\n' +
-          '    "glorp": "echo a doing the glerp glop"\n' +
-          '  },\n' +
-          '  "b": {\n' +
-          '    "glorp": "echo b doing the glerp glop"\n' +
-          '  },\n' +
-          '  "c": {\n' +
-          '    "test": "exit 0",\n' +
-          '    "posttest": "echo posttest",\n' +
-          '    "lorem": "echo c lorem"\n' +
-          '  },\n' +
-          '  "d": {\n' +
-          '    "test": "exit 0",\n' +
-          '    "posttest": "echo posttest"\n' +
-          '  },\n' +
-          '  "e": {\n' +
-          '    "test": "exit 0",\n' +
-          '    "start": "echo start something"\n' +
-          '  },\n' +
-          '  "noscripts": {}\n' +
-          '}',
-      ],
-    ])
+    const { joinedOutput } = await mockWorkspaces(t, { json: true })
+    t.matchSnapshot(joinedOutput())
   })
 
   t.test('list all scripts --parseable', async t => {
-    const { outputs } = await mockWorkspaces(t, { parseable: true })
-    t.strictSame(outputs, [
-      ['a:glorp:echo a doing the glerp glop'],
-      ['b:glorp:echo b doing the glerp glop'],
-      ['c:test:exit 0'],
-      ['c:posttest:echo posttest'],
-      ['c:lorem:echo c lorem'],
-      ['d:test:exit 0'],
-      ['d:posttest:echo posttest'],
-      ['e:test:exit 0'],
-      ['e:start:echo start something'],
-    ])
+    const { joinedOutput } = await mockWorkspaces(t, { parseable: true })
+    t.matchSnapshot(joinedOutput())
   })
 
   t.test('list no scripts --loglevel=silent', async t => {
-    const { outputs } = await mockWorkspaces(t, { silent: true })
-    t.strictSame(outputs, [])
+    const { joinedOutput } = await mockWorkspaces(t, { silent: true })
+    t.strictSame(joinedOutput(), '')
   })
 
   t.test('run scripts across all workspaces', async t => {
@@ -783,34 +678,8 @@ t.test('workspaces', async t => {
 
     await runScript.exec(['missing-script'])
     t.match(RUN_SCRIPTS(), [])
-    t.strictSame(
+    t.matchSnapshot(
       cleanLogs(),
-      [
-        'Lifecycle script `missing-script` failed with error:',
-        'Error: Missing script: "missing-script"\n\nTo see a list of scripts, run:\n  npm run',
-        '  in workspace: a@1.0.0',
-        '  at location: {CWD}/prefix/packages/a',
-        'Lifecycle script `missing-script` failed with error:',
-        'Error: Missing script: "missing-script"\n\nTo see a list of scripts, run:\n  npm run',
-        '  in workspace: b@2.0.0',
-        '  at location: {CWD}/prefix/packages/b',
-        'Lifecycle script `missing-script` failed with error:',
-        'Error: Missing script: "missing-script"\n\nTo see a list of scripts, run:\n  npm run',
-        '  in workspace: c@1.0.0',
-        '  at location: {CWD}/prefix/packages/c',
-        'Lifecycle script `missing-script` failed with error:',
-        'Error: Missing script: "missing-script"\n\nTo see a list of scripts, run:\n  npm run',
-        '  in workspace: d@1.0.0',
-        '  at location: {CWD}/prefix/packages/d',
-        'Lifecycle script `missing-script` failed with error:',
-        'Error: Missing script: "missing-script"\n\nTo see a list of scripts, run:\n  npm run',
-        '  in workspace: e',
-        '  at location: {CWD}/prefix/packages/e',
-        'Lifecycle script `missing-script` failed with error:',
-        'Error: Missing script: "missing-script"\n\nTo see a list of scripts, run:\n  npm run',
-        '  in workspace: noscripts@1.0.0',
-        '  at location: {CWD}/prefix/packages/noscripts',
-      ],
       'should log error msgs for each workspace script'
     )
   })
@@ -822,18 +691,8 @@ t.test('workspaces', async t => {
     })
 
     t.match(RUN_SCRIPTS(), [])
-    t.strictSame(
+    t.matchSnapshot(
       cleanLogs(),
-      [
-        'Lifecycle script `test` failed with error:',
-        'Error: Missing script: "test"\n\nTo see a list of scripts, run:\n  npm run',
-        '  in workspace: a@1.0.0',
-        '  at location: {CWD}/prefix/packages/a',
-        'Lifecycle script `test` failed with error:',
-        'Error: Missing script: "test"\n\nTo see a list of scripts, run:\n  npm run',
-        '  in workspace: b@2.0.0',
-        '  at location: {CWD}/prefix/packages/b',
-      ],
       'should log error msgs for each workspace script'
     )
   })
@@ -870,14 +729,8 @@ t.test('workspaces', async t => {
       workspaces: ['c'],
     })
 
-    t.strictSame(
+    t.matchSnapshot(
       cleanLogs(),
-      [
-        'Lifecycle script `test` failed with error:',
-        'Error: err',
-        '  in workspace: c@1.0.0',
-        '  at location: {CWD}/prefix/packages/c',
-      ],
       'should log error msgs for each workspace script'
     )
   })
@@ -893,14 +746,8 @@ t.test('workspaces', async t => {
       workspaces: ['a', 'b'],
     })
 
-    t.strictSame(
+    t.matchSnapshot(
       cleanLogs(),
-      [
-        'Lifecycle script `glorp` failed with error:',
-        'Error: ERR',
-        '  in workspace: a@1.0.0',
-        '  at location: {CWD}/prefix/packages/a',
-      ],
       'should log error msgs for each workspace script'
     )
 

@@ -91,6 +91,19 @@ const stream = new ReadableStream({
 })();
 ```
 
+### Node.js streams interoperability
+
+Node.js streams can be converted to web streams and vice versa via the `toWeb` and `fromWeb` methods present on [`stream.Readable`][], [`stream.Writable`][] and [`stream.Duplex`][] objects.
+
+For more details refer to the relevant documentation:
+
+* [`stream.Readable.toWeb`][]
+* [`stream.Readable.fromWeb`][]
+* [`stream.Writable.toWeb`][]
+* [`stream.Writable.fromWeb`][]
+* [`stream.Duplex.toWeb`][]
+* [`stream.Duplex.fromWeb`][]
+
 ## API
 
 ### Class: `ReadableStream`
@@ -436,6 +449,41 @@ async function* asyncIterableGenerator() {
 })();
 ```
 
+To pipe the resulting {ReadableStream} into a {WritableStream} the {Iterable}
+should yield a sequence of {Buffer}, {TypedArray}, or {DataView} objects.
+
+```mjs
+import { ReadableStream } from 'node:stream/web';
+import { Buffer } from 'node:buffer';
+
+async function* asyncIterableGenerator() {
+  yield Buffer.from('a');
+  yield Buffer.from('b');
+  yield Buffer.from('c');
+}
+
+const stream = ReadableStream.from(asyncIterableGenerator());
+
+await stream.pipeTo(createWritableStreamSomehow());
+```
+
+```cjs
+const { ReadableStream } = require('node:stream/web');
+const { Buffer } = require('node:buffer');
+
+async function* asyncIterableGenerator() {
+  yield Buffer.from('a');
+  yield Buffer.from('b');
+  yield Buffer.from('c');
+}
+
+const stream = ReadableStream.from(asyncIterableGenerator());
+
+(async () => {
+  await stream.pipeTo(createWritableStreamSomehow());
+})();
+```
+
 ### Class: `ReadableStreamDefaultReader`
 
 <!-- YAML
@@ -492,7 +540,7 @@ added: v16.5.0
 -->
 
 * Returns: A promise fulfilled with an object:
-  * `value` {ArrayBuffer}
+  * `value` {any}
   * `done` {boolean}
 
 Requests the next chunk of data from the underlying {ReadableStream}
@@ -617,15 +665,26 @@ added: v16.5.0
   {ReadableStream} is closed or rejected if the stream errors or the reader's
   lock is released before the stream finishes closing.
 
-#### `readableStreamBYOBReader.read(view)`
+#### `readableStreamBYOBReader.read(view[, options])`
 
 <!-- YAML
 added: v16.5.0
+changes:
+  - version:
+    - v21.7.0
+    - v20.17.0
+    pr-url: https://github.com/nodejs/node/pull/50888
+    description: Added `min` option.
 -->
 
 * `view` {Buffer|TypedArray|DataView}
+* `options` {Object}
+  * `min` {number} When set, the returned promise will only be
+    fulfilled as soon as `min` number of elements are available.
+    When not set, the promise fulfills when at least one element
+    is available.
 * Returns: A promise fulfilled with an object:
-  * `value` {ArrayBuffer}
+  * `value` {TypedArray|DataView}
   * `done` {boolean}
 
 Requests the next chunk of data from the underlying {ReadableStream}
@@ -1033,7 +1092,7 @@ changes:
     description: This class is now exposed on the global object.
 -->
 
-The `WritableStreamDefaultController` manage's the {WritableStream}'s
+The `WritableStreamDefaultController` manages the {WritableStream}'s
 internal state.
 
 #### `writableStreamDefaultController.error([error])`
@@ -1420,9 +1479,15 @@ changes:
 
 <!-- YAML
 added: v17.0.0
+changes:
+  - version:
+    - v21.2.0
+    - v20.12.0
+    pr-url: https://github.com/nodejs/node/pull/50097
+    description: format now accepts `deflate-raw` value.
 -->
 
-* `format` {string} One of either `'deflate'` or `'gzip'`.
+* `format` {string} One of `'deflate'`, `'deflate-raw'`, or `'gzip'`.
 
 #### `compressionStream.readable`
 
@@ -1454,9 +1519,15 @@ changes:
 
 <!-- YAML
 added: v17.0.0
+changes:
+  - version:
+    - v21.2.0
+    - v20.12.0
+    pr-url: https://github.com/nodejs/node/pull/50097
+    description: format now accepts `deflate-raw` value.
 -->
 
-* `format` {string} One of either `'deflate'` or `'gzip'`.
+* `format` {string} One of `'deflate'`, `'deflate-raw'`, or `'gzip'`.
 
 #### `decompressionStream.readable`
 
@@ -1695,3 +1766,12 @@ text(readable).then((data) => {
 
 [Streams]: stream.md
 [WHATWG Streams Standard]: https://streams.spec.whatwg.org/
+[`stream.Duplex.fromWeb`]: stream.md#streamduplexfromwebpair-options
+[`stream.Duplex.toWeb`]: stream.md#streamduplextowebstreamduplex
+[`stream.Duplex`]: stream.md#class-streamduplex
+[`stream.Readable.fromWeb`]: stream.md#streamreadablefromwebreadablestream-options
+[`stream.Readable.toWeb`]: stream.md#streamreadabletowebstreamreadable-options
+[`stream.Readable`]: stream.md#class-streamreadable
+[`stream.Writable.fromWeb`]: stream.md#streamwritablefromwebwritablestream-options
+[`stream.Writable.toWeb`]: stream.md#streamwritabletowebstreamwritable
+[`stream.Writable`]: stream.md#class-streamwritable

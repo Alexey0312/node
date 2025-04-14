@@ -1,7 +1,9 @@
-.TH "CONFIG" "7" "October 2023" "" ""
+.TH "CONFIG" "7" "April 2025" "NPM@11.3.0" ""
 .SH "NAME"
 \fBconfig\fR - More than you probably want to know about npm configuration
 .SS "Description"
+.P
+This article details npm configuration in general. To learn about the \fBconfig\fR command, see npm help config.
 .P
 npm gets its configuration values from the following sources, sorted by priority:
 .SS "Command Line Flags"
@@ -363,7 +365,7 @@ Override CPU architecture of native modules to install. Acceptable values are sa
 .SS "\fBdepth\fR"
 .RS 0
 .IP \(bu 4
-Default: \fBInfinity\fR if \fB--all\fR is set, otherwise \fB1\fR
+Default: \fBInfinity\fR if \fB--all\fR is set, otherwise \fB0\fR
 .IP \(bu 4
 Type: null or Number
 .RE 0
@@ -498,6 +500,30 @@ Type: Boolean
 If set to true, then npm will stubbornly refuse to install (or even consider installing) any package that claims to not be compatible with the current Node.js version.
 .P
 This can be overridden by setting the \fB--force\fR flag.
+.SS "\fBexpect-result-count\fR"
+.RS 0
+.IP \(bu 4
+Default: null
+.IP \(bu 4
+Type: null or Number
+.RE 0
+
+.P
+Tells to expect a specific number of results from the command.
+.P
+This config can not be used with: \fBexpect-results\fR
+.SS "\fBexpect-results\fR"
+.RS 0
+.IP \(bu 4
+Default: null
+.IP \(bu 4
+Type: null or Boolean
+.RE 0
+
+.P
+Tells npm whether or not to expect results from the command. Can be either true (expect some results) or false (expect no results).
+.P
+This config can not be used with: \fBexpect-result-count\fR
 .SS "\fBfetch-retries\fR"
 .RS 0
 .IP \(bu 4
@@ -590,7 +616,7 @@ If you don't have a clear idea of what you want to do, it is strongly recommende
 .SS "\fBforeground-scripts\fR"
 .RS 0
 .IP \(bu 4
-Default: false
+Default: \fBfalse\fR unless when using \fBnpm pack\fR or \fBnpm publish\fR where it defaults to \fBtrue\fR
 .IP \(bu 4
 Type: Boolean
 .RE 0
@@ -802,6 +828,16 @@ Type: Path
 
 .P
 A module that will be loaded by the \fBnpm init\fR command. See the documentation for the \fBinit-package-json\fR \fI\(lahttps://github.com/npm/init-package-json\(ra\fR module for more information, or npm help init.
+.SS "\fBinit-type\fR"
+.RS 0
+.IP \(bu 4
+Default: "commonjs"
+.IP \(bu 4
+Type: String
+.RE 0
+
+.P
+The value that \fBnpm init\fR should use by default for the package.json type field.
 .SS "\fBinit-version\fR"
 .RS 0
 .IP \(bu 4
@@ -865,6 +901,16 @@ If a package cannot be installed because of overly strict \fBpeerDependencies\fR
 This differs from \fB--omit=peer\fR, in that \fB--omit=peer\fR will avoid unpacking \fBpeerDependencies\fR on disk, but will still design a tree such that \fBpeerDependencies\fR \fIcould\fR be unpacked in a correct place.
 .P
 Use of \fBlegacy-peer-deps\fR is not recommended, as it will not enforce the \fBpeerDependencies\fR contract that meta-dependencies may rely on.
+.SS "\fBlibc\fR"
+.RS 0
+.IP \(bu 4
+Default: null
+.IP \(bu 4
+Type: null or String
+.RE 0
+
+.P
+Override libc of native modules to install. Acceptable values are same as \fBlibc\fR field of package.json
 .SS "\fBlink\fR"
 .RS 0
 .IP \(bu 4
@@ -990,6 +1036,18 @@ Type: String
 Commit message which is used by \fBnpm version\fR when creating version commit.
 .P
 Any "%s" in the message will be replaced with the version number.
+.SS "\fBnode-gyp\fR"
+.RS 0
+.IP \(bu 4
+Default: The path to the node-gyp bin that ships with npm
+.IP \(bu 4
+Type: Path
+.RE 0
+
+.P
+This is the location of the "node-gyp" bin. By default it uses one that ships with npm itself.
+.P
+You can use this config to specify your own "node-gyp" to run when it is required to build a package.
 .SS "\fBnode-options\fR"
 .RS 0
 .IP \(bu 4
@@ -1183,7 +1241,7 @@ Type: Boolean
 .RE 0
 
 .P
-When set to \fBtrue\fR, npm will display a progress bar during time intensive operations, if \fBprocess.stderr\fR is a TTY.
+When set to \fBtrue\fR, npm will display a progress bar during time intensive operations, if \fBprocess.stderr\fR and \fBprocess.stdout\fR are a TTY.
 .P
 Set to \fBfalse\fR to suppress the progress bar.
 .SS "\fBprovenance\fR"
@@ -1374,7 +1432,7 @@ Type: "library", "application", or "framework"
 .RE 0
 
 .P
-The type of package described by the generated SBOM. For SPDX, this is the value for the \fBprimaryPackagePurpose\fR fieled. For CycloneDX, this is the value for the \fBtype\fR field.
+The type of package described by the generated SBOM. For SPDX, this is the value for the \fBprimaryPackagePurpose\fR field. For CycloneDX, this is the value for the \fBtype\fR field.
 .SS "\fBscope\fR"
 .RS 0
 .IP \(bu 4
@@ -1531,9 +1589,12 @@ Type: String
 .P
 If you ask npm to install a package and don't tell it a specific version, then it will install the specified tag.
 .P
-Also the tag that is added to the package@version specified by the \fBnpm tag\fR command, if no explicit tag is given.
+It is the tag added to the package@version specified in the \fBnpm dist-tag
+add\fR command, if no explicit tag is given.
 .P
 When used by the \fBnpm diff\fR command, this is the tag used to fetch the tarball that will be compared with the local files by default.
+.P
+If used in the \fBnpm publish\fR command, this is the tag that will be added to the package submitted to the registry.
 .SS "\fBtag-version-prefix\fR"
 .RS 0
 .IP \(bu 4
@@ -1796,7 +1857,7 @@ Default: null
 .IP \(bu 4
 Type: null or String
 .IP \(bu 4
-DEPRECATED: \fBkey\fR and \fBcert\fR are no longer used for most registry operations. Use registry scoped \fBkeyfile\fR and \fBcertfile\fR instead. Example: //other-registry.tld/:keyfile=/path/to/key.pem //other-registry.tld/:certfile=/path/to/cert.crt
+DEPRECATED: \fBkey\fR and \fBcert\fR are no longer used for most registry operations. Use registry scoped \fBkeyfile\fR and \fBcafile\fR instead. Example: //other-registry.tld/:keyfile=/path/to/key.pem //other-registry.tld/:cafile=/path/to/cert.crt
 .RE 0
 
 .P
@@ -1808,7 +1869,7 @@ cert="-----BEGIN CERTIFICATE-----\[rs]nXXXX\[rs]nXXXX\[rs]n-----END CERTIFICATE-
 .fi
 .RE
 .P
-It is \fInot\fR the path to a certificate file, though you can set a registry-scoped "certfile" path like "//other-registry.tld/:certfile=/path/to/cert.pem".
+It is \fInot\fR the path to a certificate file, though you can set a registry-scoped "cafile" path like "//other-registry.tld/:cafile=/path/to/cert.pem".
 .SS "\fBdev\fR"
 .RS 0
 .IP \(bu 4
@@ -1912,7 +1973,7 @@ Default: null
 .IP \(bu 4
 Type: null or String
 .IP \(bu 4
-DEPRECATED: \fBkey\fR and \fBcert\fR are no longer used for most registry operations. Use registry scoped \fBkeyfile\fR and \fBcertfile\fR instead. Example: //other-registry.tld/:keyfile=/path/to/key.pem //other-registry.tld/:certfile=/path/to/cert.crt
+DEPRECATED: \fBkey\fR and \fBcert\fR are no longer used for most registry operations. Use registry scoped \fBkeyfile\fR and \fBcafile\fR instead. Example: //other-registry.tld/:keyfile=/path/to/key.pem //other-registry.tld/:cafile=/path/to/cert.crt
 .RE 0
 
 .P

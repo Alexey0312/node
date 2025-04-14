@@ -26,7 +26,7 @@ static void cms_env_set_version(CMS_EnvelopedData *env);
 #define CMS_ENVELOPED_STANDARD 1
 #define CMS_ENVELOPED_AUTH     2
 
-static int cms_get_enveloped_type(const CMS_ContentInfo *cms)
+static int cms_get_enveloped_type_simple(const CMS_ContentInfo *cms)
 {
     int nid = OBJ_obj2nid(cms->contentType);
 
@@ -38,9 +38,17 @@ static int cms_get_enveloped_type(const CMS_ContentInfo *cms)
         return CMS_ENVELOPED_AUTH;
 
     default:
-        ERR_raise(ERR_LIB_CMS, CMS_R_CONTENT_TYPE_NOT_ENVELOPED_DATA);
         return 0;
     }
+}
+
+static int cms_get_enveloped_type(const CMS_ContentInfo *cms)
+{
+    int ret = cms_get_enveloped_type_simple(cms);
+
+    if (ret == 0)
+        ERR_raise(ERR_LIB_CMS, CMS_R_CONTENT_TYPE_NOT_ENVELOPED_DATA);
+    return ret;
 }
 
 CMS_EnvelopedData *ossl_cms_get0_enveloped(CMS_ContentInfo *cms)

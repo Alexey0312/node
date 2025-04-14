@@ -109,6 +109,36 @@ t.test('single node - application package type', t => {
   t.end()
 })
 
+t.test('single node - with single license', t => {
+  const pkg = { ...rootPkg, license: 'ISC' }
+  const node = { ...root, package: pkg }
+  const res = spdxOutput({ npm, nodes: [node] })
+  t.matchSnapshot(JSON.stringify(res))
+  t.end()
+})
+
+t.test('single node - with license object', t => {
+  const pkg = {
+    ...rootPkg,
+    license: {
+      type: 'MIT',
+      url: 'http://github.com/kriskowal/q/raw/master/LICENSE',
+    },
+  }
+  const node = { ...root, package: pkg }
+  const res = spdxOutput({ npm, nodes: [node] })
+  t.matchSnapshot(JSON.stringify(res))
+  t.end()
+})
+
+t.test('single node - with license expression', t => {
+  const pkg = { ...rootPkg, license: '(MIT OR Apache-2.0)' }
+  const node = { ...root, package: pkg }
+  const res = spdxOutput({ npm, nodes: [node] })
+  t.matchSnapshot(JSON.stringify(res))
+  t.end()
+})
+
 t.test('single node - with description', t => {
   const pkg = { ...rootPkg, description: 'Package description' }
   const node = { ...root, package: pkg }
@@ -133,7 +163,6 @@ t.test('single node - with homepage', t => {
 })
 
 t.test('single node - with integrity', t => {
-  /* eslint-disable-next-line max-len */
   const node = { ...root, integrity: 'sha512-1RkbFGUKex4lvsB9yhIfWltJM5cZKUftB2eNajaDv3dCMEp49iBG0K14uH8NnX9IPux2+mK7JGEOB0jn48/J6w==' }
   const res = spdxOutput({ npm, nodes: [node] })
   t.matchSnapshot(JSON.stringify(res))
@@ -165,6 +194,17 @@ t.test('node - with deps', t => {
       { to: { packageName: 'foo' } },
     ] }
   const res = spdxOutput({ npm, nodes: [node, dep1, dep2, dep3, dep4Link, dep4, dep5, dep6] })
+  t.matchSnapshot(JSON.stringify(res))
+  t.end()
+})
+
+t.test('node - with duplicate deps', t => {
+  const node = { ...root,
+    edgesOut: [
+      { to: dep1 },
+      { to: dep2 },
+    ] }
+  const res = spdxOutput({ npm, nodes: [node, dep1, dep2, dep1, dep2] })
   t.matchSnapshot(JSON.stringify(res))
   t.end()
 })

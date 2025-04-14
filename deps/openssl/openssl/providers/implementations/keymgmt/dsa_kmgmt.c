@@ -223,6 +223,9 @@ static int dsa_export(void *keydata, int selection, OSSL_CALLBACK *param_cb,
     if (!ossl_prov_is_running() || dsa == NULL)
         return 0;
 
+    if ((selection & DSA_POSSIBLE_SELECTIONS) == 0)
+        return 0;
+
     tmpl = OSSL_PARAM_BLD_new();
     if (tmpl == NULL)
         return 0;
@@ -423,7 +426,7 @@ static void *dsa_gen_init(void *provctx, int selection,
         gctx->hindex = 0;
     }
     if (!dsa_gen_set_params(gctx, params)) {
-        OPENSSL_free(gctx);
+        dsa_gen_cleanup(gctx);
         gctx = NULL;
     }
     return gctx;
